@@ -1,0 +1,82 @@
+## Used by Visual Studio / MSBuild / dotnet CLI
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Re]leases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bsearch/
+giga/
+obj/
+bin/
+
+# Projetc folders
+Docs/
+
+# Tooling and tasks
+_ReSharper*/
+*.nuget.props
+*.nuget.targets
+
+## IDE - Visual Studio
+.vs/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+*.ltx
+
+## IDE - Visual Studio Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+## IDE - JetBrains Rider
+.idea/
+*.sln.iml
+
+## Operating System Files
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+## Package Management
+# NuGet Packages
+*.nupkg
+# The packages folder can be ignored if using central package management or standard package references
+packages/
+!packages/repositories.config
+
+## Configuration and Secrets Management
+# Local development application configurations that might contain local database connection strings
+# un-comment the next line if you want to force developers to maintain their own local configurations:
+# appsettings.Development.json
+
+# User secrets ID storage (Secrets manager)
+secrets.json
+.microsoft.dotnet.secretmanager/
+
+## EF Core and Database Tools
+# Ignore SQLite local databases if used for local testing
+*.db
+*.db-shm
+*.db-wal
+
+# SQL Server local database files
+*.mdf
+*.ldf
+
+## Log Files
+*.log
