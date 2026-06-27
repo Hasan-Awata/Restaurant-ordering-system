@@ -8,12 +8,12 @@ namespace OrderingSystem.WebApi.Controllers
     [Route("api/tables/sessions")]
     public class TableSessionsController : ControllerBase
     {
-        private readonly ITableSessionCommand _commandService;
+        private readonly ISessionCommand _commandService;
         private readonly ITableSessionQuery _queryService;
 
         // Explicit dependency routing
         public TableSessionsController(
-            ITableSessionCommand commandService,
+            ISessionCommand commandService,
             ITableSessionQuery queryService)
         {
             _commandService = commandService;
@@ -22,7 +22,7 @@ namespace OrderingSystem.WebApi.Controllers
 
         // 1. WRITE ENDPOINT (Command Path)
         [HttpPost("activate")]
-        public async Task<IActionResult> Activate([FromBody] ActivateSessionRequest request)
+        public async Task<IActionResult> Activate([FromBody] ActivateSessionByAdminRequest request)
         {
             var response = await _commandService.ActivateAsync(request);
             return Ok(response);
