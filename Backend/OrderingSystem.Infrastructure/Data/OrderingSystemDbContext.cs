@@ -10,7 +10,6 @@ namespace OrderingSystem.Infrastructure.Data
         {
         }
 
-        // DbSets representing your tables
         public DbSet<User> Users { get; set; }
         public DbSet<Table> Tables { get; set; }
         public DbSet<TableSession> TableSessions { get; set; }
@@ -43,16 +42,9 @@ namespace OrderingSystem.Infrastructure.Data
             {
                 entity.HasKey(e => e.TableSessionId);
 
-                // Foreign Key to Table
                 entity.HasOne(e => e.Table)
-                      .WithMany(t => t.Session)
-                      .HasForeignKey(e => e.TableId)
-                      .OnDelete(DeleteBehavior.Restrict);
-
-                // Foreign Key to Waiter (User)
-                entity.HasOne(e => e.Host)
-                      .WithMany(u => u.TableSessions)
-                      .HasForeignKey(e => e.WaiterId)
+                      .WithOne(t => t.Session)
+                      .HasForeignKey<TableSession>(e => e.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
             });
 
@@ -68,7 +60,7 @@ namespace OrderingSystem.Infrastructure.Data
             modelBuilder.Entity<MenuItem>(entity =>
             {
                 entity.HasKey(e => e.MenuItemId);
-                entity.Property(e => e.Price).HasColumnType("decimal(18,2)"); // Prevents EF Core warnings
+                entity.Property(e => e.Price).HasPrecision(18, 2);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
 
@@ -78,11 +70,10 @@ namespace OrderingSystem.Infrastructure.Data
                       .OnDelete(DeleteBehavior.Cascade);
             });
 
-            // 6. SessionDevices
+            // 6. DeviceSession
             modelBuilder.Entity<DeviceSession>(entity =>
             {
                 entity.HasKey(e => e.DeviceSessionId);
-                entity.Property(e => e.DeviceToken).HasMaxLength(500);
 
                 entity.HasOne(e => e.TableSession)
                       .WithMany(s => s.Devices)
@@ -94,16 +85,16 @@ namespace OrderingSystem.Infrastructure.Data
             modelBuilder.Entity<Order>(entity =>
             {
                 entity.HasKey(e => e.OrderId);
-                entity.Property(e => e.TotalAmount).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
 
                 entity.HasOne(e => e.Session)
                       .WithMany(s => s.Orders)
-                      .HasForeignKey(e => e.SessionId)
-                      .OnDelete(DeleteBehavior.Restrict); // Prevent cascading cycles
+                      .HasForeignKey(e => e.TableSessionId)
+                      .OnDelete(DeleteBehavior.Restrict);
 
                 entity.HasOne(e => e.Device)
                       .WithMany(d => d.Orders)
-                      .HasForeignKey(e => e.DeviceId)
+                      .HasForeignKey(e => e.DeviceSessionId)
                       .OnDelete(DeleteBehavior.Restrict);
             });
 
@@ -111,7 +102,7 @@ namespace OrderingSystem.Infrastructure.Data
             modelBuilder.Entity<OrderItem>(entity =>
             {
                 entity.HasKey(e => e.OrderItemId);
-                entity.Property(e => e.UnitPrice).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
 
                 entity.HasOne(e => e.Order)
                       .WithMany(o => o.OrderItems)

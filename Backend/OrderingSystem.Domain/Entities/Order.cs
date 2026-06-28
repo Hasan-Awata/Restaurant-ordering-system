@@ -8,8 +8,8 @@ namespace OrderingSystem.Domain.Entities
     public class Order
     {
         public int OrderId { get; set; }
-        public int SessionId { get; set; }
-        public int DeviceId { get; set; }
+        public Guid TableSessionId { get; set; }
+        public Guid DeviceSessionId { get; set; }
         public decimal TotalAmount { get; set; }
         public enOrderStatusType OrderStatus { get; set; }
         public DateTime CreatedAt { get; set; }

@@ -66,7 +66,11 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Infrastructure.Hubs;
+using OrderingSystem.Infrastructure.Notifications;
+using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -122,16 +126,12 @@ builder.Services.AddSwaggerGen(options =>
 
 
 // ── Dependency Injections ──────────────────────────────────────────────────
-// In Program.cs or your Infrastructure dependency injection extension:
+builder.Services.AddSignalR();
+builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
 
-builder.Services.AddScoped<TableSessionRepository>();
+builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
+builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
 
-// Resolve both interfaces using the same concrete type registration
-builder.Services.AddScoped<ITableSessionRepository>(provider =>
-    provider.GetRequiredService<TableSessionRepository>());
-
-builder.Services.AddScoped<ITableSessionQuery>(provider =>
-    provider.GetRequiredService<TableSessionRepository>());
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -176,6 +176,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
+app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 
 app.UseHttpsRedirection();
 app.UseCors("AllowAll"); // Delete on actual deployment
@@ -290,12 +292,13 @@ namespace OrderingSystem.Application.DTOs
 {
     // Command Payloads
     public record ProcessQrCodeRequest(string qrCode, Guid? deviceSessionId = null);
+    public record ApproveJoiningSessionRequest(Guid deviceSessionId);
     public record DeactivateSessionByAdminRequest(int TableId);
 
 
     // Query/Command Response Payloads
-    public record DeviceSessionResponse(int SessionId, int DeviceId, string DeviceToken, enDeviceRole DeviceRole, bool IsApproved);
-    public record TableSessionResponse(int SessionId, int TableNumber, string Status, string SessionToken, DateTime CreatedAt);
+    public record DeviceSessionResponse(Guid DeviceSessionId, enDeviceRole DeviceRole, bool IsApproved);
+    public record TableSessionResponse(Guid TableSessionId, int TableNumber, enSessionStatus Status, DateTime CreatedAt);
     public record SessionResponse(TableSessionResponse TableSession, DeviceSessionResponse? DeviceSession);
 }
 
@@ -348,7 +351,46 @@ namespace OrderingSystem.Application.Interfaces.DeviceSessionInterfaces
     public interface IDeviceSessionRepository
     {
         public Task AddSessionAsync(DeviceSession session);
-        public Task UpdateSessionAsync(DeviceSession session);
+        public Task UpdateDeviceSessionAsync(DeviceSession session);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\Notifications\IRealTimeNotifier.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.Notifications
+{
+    public interface IRealTimeNotifier
+    {
+        public Task NotifyCashiersOfActivationAsync(int tableId, Guid tableSessionId);
+        public Task NotifyHostOfGuestJoinAsync(Guid tableSessionId, Guid guestDeviceSessionId);
+        public Task NotifyGuestOfApprovalAsync(Guid guestDeviceSessionId);
+        public Task NotifyWaitersOfNewOrderAsync(int tableId, int orderId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\Notifications\ITableSessionNotificationsHub.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.Notifications
+{
+    public interface ITableSessionNotificationsHub
+    {
+        public Task ReceiveActivationRequest(int tableId, Guid tableSessionId, string message);
+        public Task ReceiveJoinRequest(Guid deviceSessionId, string message);
+        public Task ReceiveApprovalNotification(string message);
+
+        // Add future notifications here (e.g., ReceiveNewOrder, ReceivePaymentAlert)
     }
 }
 
@@ -382,7 +424,8 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 {
     public interface ISessionCommand
     {
-        Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request);
+        public Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request);
+        public Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request);
     }
 }
 
@@ -391,6 +434,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableSessionInterfaces\ITableSessionQuery.cs
 ----------------------------------------
 ﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Entities;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -399,7 +443,9 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 {
     public interface ITableSessionQuery
     {
-        Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId);
+        public Task<Table?> GetTableWithActiveSessionAsync(string qrCode);
+
+        public Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId);
     }
 }
 
@@ -416,7 +462,6 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 {
     public interface ITableSessionRepository
     {
-        public Task<Table?> GetTableWithActiveSessionAsync(string qrCode);
         public Task AddSessionAsync(TableSession session);
     }
 }
@@ -434,18 +479,12 @@ namespace OrderingSystem.Application.Mappers
 {
     public static class SessionsMappers
     {
-        // ── WRITE PATH ──────────────────────────────────────────────────────────
-
-
-        // ── READ PATH ───────────────────────────────────────────────────────────
-
         public static TableSessionResponse ToResponse(this TableSession entity)
         {
             return new TableSessionResponse(
-                entity.TableId, // Assuming you adjust the record to match
+                entity.TableSessionId,
                 entity.Table?.TableNumber ?? 0,
-                entity.Status.ToString(),
-                entity.TableSessionId.ToString("N"), // Use the ID as the token string
+                entity.Status,
                 entity.CreatedAt
             );
         }
@@ -453,9 +492,7 @@ namespace OrderingSystem.Application.Mappers
         public static DeviceSessionResponse ToResponse(this DeviceSession entity)
         {
             return new DeviceSessionResponse(
-                0, // Adjust DTO if DeviceSessionId is a Guid now
-                entity.TableSessionId.GetHashCode(), // Example adjustment
-                entity.DeviceSessionId.ToString("N"), // Use ID as token
+                entity.DeviceSessionId,  
                 entity.Role,
                 entity.IsApproved
             );
@@ -487,25 +524,29 @@ namespace OrderingSystem.Application.Services
     public class SessionCommandService : ISessionCommand
     {
         private readonly ITableSessionRepository _tableSessionRepository;
-        private readonly ITableRepository _tableRepository;
+        private readonly ITableSessionQuery _tableSessionQuery;
         private readonly IDeviceSessionRepository _deviceSessionRepository;
+        private readonly IDeviceSessionQuery _deviceSessionQuery;
         //private readonly IHubContext<OrderingHub> _hubContext; // Injected Hub Context
 
         public SessionCommandService(
             ITableSessionRepository tableSessionRepository,
             IDeviceSessionRepository deviceSessionRepository,
-            ITableRepository tableRepository)
+            ITableRepository tableRepository,
+            IDeviceSessionQuery deviceSessionQuery,
+            ITableSessionQuery tableSessionQuery)
             //IHubContext<OrderingHub> hubContext)
         {
             _tableSessionRepository = tableSessionRepository;
             _deviceSessionRepository = deviceSessionRepository;
-            _tableRepository = tableRepository;
+            _deviceSessionQuery = deviceSessionQuery;
+            _tableSessionQuery = tableSessionQuery;
             //_hubContext = hubContext;
         }
 
         public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request)
         {
-            var table = await _tableSessionRepository.GetTableWithActiveSessionAsync(request.qrCode);
+            var table = await _tableSessionQuery.GetTableWithActiveSessionAsync(request.qrCode);
 
             if (table == null)
             {
@@ -596,9 +637,9 @@ namespace OrderingSystem.Application.Services
             return Result<SessionResponse>.Failure("Not Implemented", enErrorType.Failure);
         }
 
-        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningRequest request)
+        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request)
         {
-            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.deviceSessionId);
+            var deviceSession = await _deviceSessionQuery.GetDeviceSessionByIdAsync(request.deviceSessionId);
 
             if (deviceSession == null)
             {
@@ -606,7 +647,7 @@ namespace OrderingSystem.Application.Services
             }
 
             deviceSession.IsApproved = true;
-            await _deviceSessionRepository.UpdateSessionAsync(deviceSession);
+            await _deviceSessionRepository.UpdateDeviceSessionAsync(deviceSession);
 
             // Real-Time Notification: Notify the specific guest that they have been approved
             //await _hubContext.Clients.Group(deviceSession.DeviceSessionId.ToString()).SendAsync("ReceiveApprovalNotification", new
@@ -768,8 +809,8 @@ namespace OrderingSystem.Domain.Entities
     public class Order
     {
         public int OrderId { get; set; }
-        public int SessionId { get; set; }
-        public int DeviceId { get; set; }
+        public Guid TableSessionId { get; set; }
+        public Guid DeviceSessionId { get; set; }
         public decimal TotalAmount { get; set; }
         public enOrderStatusType OrderStatus { get; set; }
         public DateTime CreatedAt { get; set; }
@@ -874,9 +915,6 @@ namespace OrderingSystem.Domain.Entities
         public string FullName { get; set; } = string.Empty;
         public string PasswordHash { get; set; } = string.Empty;
         public enRoleType Role { get; set; }
-
-        // Navigation
-        public ICollection<TableSession> TableSessions { get; set; } = new List<TableSession>();
     }
 }
 
@@ -1003,6 +1041,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastru
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.2.11" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -1035,7 +1074,6 @@ namespace OrderingSystem.Infrastructure.Data
         {
         }
 
-        // DbSets representing your tables
         public DbSet<User> Users { get; set; }
         public DbSet<Table> Tables { get; set; }
         public DbSet<TableSession> TableSessions { get; set; }
@@ -1068,16 +1106,9 @@ namespace OrderingSystem.Infrastructure.Data
             {
                 entity.HasKey(e => e.TableSessionId);
 
-                // Foreign Key to Table
                 entity.HasOne(e => e.Table)
-                      .WithMany(t => t.Session)
-                      .HasForeignKey(e => e.TableId)
-                      .OnDelete(DeleteBehavior.Restrict);
-
-                // Foreign Key to Waiter (User)
-                entity.HasOne(e => e.Host)
-                      .WithMany(u => u.TableSessions)
-                      .HasForeignKey(e => e.WaiterId)
+                      .WithOne(t => t.Session)
+                      .HasForeignKey<TableSession>(e => e.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
             });
 
@@ -1093,7 +1124,7 @@ namespace OrderingSystem.Infrastructure.Data
             modelBuilder.Entity<MenuItem>(entity =>
             {
                 entity.HasKey(e => e.MenuItemId);
-                entity.Property(e => e.Price).HasColumnType("decimal(18,2)"); // Prevents EF Core warnings
+                entity.Property(e => e.Price).HasPrecision(18, 2);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
 
@@ -1103,11 +1134,10 @@ namespace OrderingSystem.Infrastructure.Data
                       .OnDelete(DeleteBehavior.Cascade);
             });
 
-            // 6. SessionDevices
+            // 6. DeviceSession
             modelBuilder.Entity<DeviceSession>(entity =>
             {
                 entity.HasKey(e => e.DeviceSessionId);
-                entity.Property(e => e.DeviceToken).HasMaxLength(500);
 
                 entity.HasOne(e => e.TableSession)
                       .WithMany(s => s.Devices)
@@ -1119,16 +1149,16 @@ namespace OrderingSystem.Infrastructure.Data
             modelBuilder.Entity<Order>(entity =>
             {
                 entity.HasKey(e => e.OrderId);
-                entity.Property(e => e.TotalAmount).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
 
                 entity.HasOne(e => e.Session)
                       .WithMany(s => s.Orders)
-                      .HasForeignKey(e => e.SessionId)
-                      .OnDelete(DeleteBehavior.Restrict); // Prevent cascading cycles
+                      .HasForeignKey(e => e.TableSessionId)
+                      .OnDelete(DeleteBehavior.Restrict);
 
                 entity.HasOne(e => e.Device)
                       .WithMany(d => d.Orders)
-                      .HasForeignKey(e => e.DeviceId)
+                      .HasForeignKey(e => e.DeviceSessionId)
                       .OnDelete(DeleteBehavior.Restrict);
             });
 
@@ -1136,7 +1166,7 @@ namespace OrderingSystem.Infrastructure.Data
             modelBuilder.Entity<OrderItem>(entity =>
             {
                 entity.HasKey(e => e.OrderItemId);
-                entity.Property(e => e.UnitPrice).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
 
                 entity.HasOne(e => e.Order)
                       .WithMany(o => o.OrderItems)
@@ -1152,6 +1182,152 @@ namespace OrderingSystem.Infrastructure.Data
     }
 }
 
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\ExternalServices\Notifications\SignalRNotifier.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.SignalR;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Infrastructure.Hubs;
+
+namespace OrderingSystem.Infrastructure.Notifications
+{
+    public class SignalRNotifier : IRealTimeNotifier
+    {
+        private readonly IHubContext<TableSessionNotificationsHub, ITableSessionNotificationsHub> _hubContext;
+
+        public SignalRNotifier(IHubContext<TableSessionNotificationsHub, ITableSessionNotificationsHub> hubContext)
+        {
+            _hubContext = hubContext;
+        }
+
+        public async Task NotifyCashiersOfActivationAsync(int tableId, Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveActivationRequest(tableId, tableSessionId, $"Table {tableId} is requesting activation.");
+        }
+
+        public async Task NotifyHostOfGuestJoinAsync(Guid tableSessionId, Guid guestDeviceSessionId)
+        {
+            // The Host's frontend will have called JoinTableSessionGroup with this ID
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveJoinRequest(guestDeviceSessionId, "A new guest is requesting to join your table.");
+        }
+
+        public async Task NotifyGuestOfApprovalAsync(Guid guestDeviceSessionId)
+        {
+            // The Guest's frontend will have called RegisterDeviceGroup with this ID
+            await _hubContext.Clients.Group(guestDeviceSessionId.ToString())
+                .ReceiveApprovalNotification("Your request to join the table has been approved.");
+        }
+
+        public async Task NotifyWaitersOfNewOrderAsync(int tableId, int orderId)
+        {
+            // Example for future expansion
+            // await _hubContext.Clients.Group(OrderingHub.Groups.Waiters).ReceiveNewOrder(...);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\ExternalServices\Notifications\TableSessionNotificationsHub.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.SignalR;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Domain.Enums;
+using System.Security.Claims;
+
+namespace OrderingSystem.Infrastructure.Hubs
+{
+    public class TableSessionNotificationsHub : Hub<ITableSessionNotificationsHub>
+    {
+        // 1. RENAME THIS to avoid colliding with the base Hub.Groups property
+        public static class GroupNames
+        {
+            public const string Cashiers = "Group_Cashiers";
+            public const string Waiters = "Group_Waiters";
+        }
+
+        public override async Task OnConnectedAsync()
+        {
+            // Example: Auto-assign authenticated staff to groups based on their JWT claims
+            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
+
+            if (role == enRoleType.Accountant.ToString() || role == enRoleType.Admin.ToString())
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Cashiers);
+            }
+            else if (role == enRoleType.Waiter.ToString())
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Waiters);
+            }
+
+            await base.OnConnectedAsync();
+        }
+
+        // Table hosts/guests explicitly join a room for their specific session
+        public async Task JoinTableSessionGroup(Guid tableSessionId)
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, tableSessionId.ToString());
+        }
+
+        public async Task LeaveTableSessionGroup(Guid tableSessionId)
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, tableSessionId.ToString());
+        }
+
+        // Similarly, target specific devices by their unique ID
+        public async Task RegisterDeviceGroup(Guid deviceSessionId)
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, deviceSessionId.ToString());
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\TableSessionQuery.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Mappers;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Queries
+{
+    public class TableSessionQuery : ITableSessionQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableSessionQuery(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        // ── Command-Side Hydration Query ─────────────────────────────────────────
+        public async Task<Table?> GetTableWithActiveSessionAsync(string qrCode)
+        {
+            // Fetches the domain entity for business rule validation in the Command service.
+            // Includes the Session navigation property so you can check table.Session != null.
+            return await _context.Tables
+                .Include(t => t.Session)
+                .FirstOrDefaultAsync(t => t.QrCode == qrCode);
+        }
+
+        // ── Pure Read-Side Query (CQRS) ──────────────────────────────────────────
+        public async Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId)
+        {
+            // Bypasses entity tracking and maps directly from SQL to your DTO.
+            // This eliminates the need for your SessionsMappers.cs on the read path entirely.
+            return await _context.TableSessions
+                .AsNoTracking()
+                .Where(s => s.TableId == tableId && s.Status == enSessionStatus.Active)
+                .Select(s => s.ToResponse())
+                .FirstOrDefaultAsync();
+        }
+    }
+}
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\TableSessionRepository.cs
@@ -1170,7 +1346,7 @@ using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 
 namespace OrderingSystem.Infrastructure.Repositories
 {
-    public class TableSessionRepository : ITableSessionRepository, ITableSessionQuery
+    public class TableSessionRepository : ITableSessionRepository
     {
         private readonly OrderingSystemDbContext _context;
 
@@ -1179,32 +1355,11 @@ namespace OrderingSystem.Infrastructure.Repositories
             _context = context;
         }
 
-        // ==========================================
-        // WRITE PATH (ITableSessionRepository)
-        // ==========================================
-        public async Task<Table?> GetTableWithActiveSessionAsync(int tableId)
-        {
-            // Tracks entity state for changes
-            return await _context.Tables.FirstOrDefaultAsync(t => t.TableId == tableId);
-        }
 
         public async Task AddSessionAsync(TableSession session)
         {
             _context.TableSessions.Add(session);
             await _context.SaveChangesAsync();
-        }
-
-        // ==========================================
-        // READ PATH (ITableSessionQueryService)
-        // ==========================================
-        public async Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId)
-        {
-            var entity = await _context.TableSessions
-                .Include(s => s.Table)
-                .AsNoTracking() // Read optimization
-                .FirstOrDefaultAsync(s => s.TableId == tableId && s.Status == enSessionStatus.Active);
-
-            return entity?.ToResponse();
         }
     }
 }

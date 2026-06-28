@@ -2,7 +2,11 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Infrastructure.Hubs;
+using OrderingSystem.Infrastructure.Notifications;
+using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -58,16 +62,12 @@ builder.Services.AddSwaggerGen(options =>
 
 
 // ── Dependency Injections ──────────────────────────────────────────────────
-// In Program.cs or your Infrastructure dependency injection extension:
+builder.Services.AddSignalR();
+builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
 
-builder.Services.AddScoped<TableSessionRepository>();
+builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
+builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
 
-// Resolve both interfaces using the same concrete type registration
-builder.Services.AddScoped<ITableSessionRepository>(provider =>
-    provider.GetRequiredService<TableSessionRepository>());
-
-builder.Services.AddScoped<ITableSessionQuery>(provider =>
-    provider.GetRequiredService<TableSessionRepository>());
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -112,6 +112,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
+app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 
 app.UseHttpsRedirection();
 app.UseCors("AllowAll"); // Delete on actual deployment

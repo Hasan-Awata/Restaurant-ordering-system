@@ -6,6 +6,7 @@ using OrderingSystem.Domain.Common;
 using OrderingSystem.Application.Interfaces.DeviceSessionInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Application.Interfaces.Notifications;
 //using Microsoft.AspNetCore.SignalR; 
 //using OrderingSystem.Application.Hubs;
 
@@ -17,21 +18,20 @@ namespace OrderingSystem.Application.Services
         private readonly ITableSessionQuery _tableSessionQuery;
         private readonly IDeviceSessionRepository _deviceSessionRepository;
         private readonly IDeviceSessionQuery _deviceSessionQuery;
-        //private readonly IHubContext<OrderingHub> _hubContext; // Injected Hub Context
-
+        private readonly IRealTimeNotifier _notifier;
         public SessionCommandService(
             ITableSessionRepository tableSessionRepository,
             IDeviceSessionRepository deviceSessionRepository,
             ITableRepository tableRepository,
             IDeviceSessionQuery deviceSessionQuery,
-            ITableSessionQuery tableSessionQuery)
-            //IHubContext<OrderingHub> hubContext)
+            ITableSessionQuery tableSessionQuery,
+            IRealTimeNotifier notifier)
         {
             _tableSessionRepository = tableSessionRepository;
             _deviceSessionRepository = deviceSessionRepository;
             _deviceSessionQuery = deviceSessionQuery;
             _tableSessionQuery = tableSessionQuery;
-            //_hubContext = hubContext;
+            _notifier = notifier;
         }
 
         public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request)
@@ -86,12 +86,7 @@ namespace OrderingSystem.Application.Services
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
 
             // Real-Time Notification: Send alert to all connected Cashiers/Admins
-            //await _hubContext.Clients.Group("Admins").SendAsync("ReceiveActivationRequest", new
-            //{
-            //    TableId = tableId,
-            //    TableSessionId = tableSession.TableSessionId,
-            //    Message = $"Table {tableId} is requesting activation."
-            //});
+            await _notifier.NotifyCashiersOfActivationAsync(tableId, tableSession.TableSessionId);
 
             return Result<SessionResponse>.Success(tableSession.ToResponse(deviceSession));
         }
@@ -109,12 +104,7 @@ namespace OrderingSystem.Application.Services
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
 
             // Real-Time Notification: Alert the specific Table Session Room (The Host)
-            // The Host's frontend will listen to their specific tableSessionId group string
-            //await _hubContext.Clients.Group(tableSession.TableSessionId.ToString()).SendAsync("ReceiveJoinRequest", new
-            //{
-            //    DeviceSessionId = deviceSessionId,
-            //    Message = "A new guest is requesting to join your table."
-            //});
+            await _notifier.NotifyHostOfGuestJoinAsync(tableSession.TableSessionId, deviceSessionId);
 
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(tableSession, deviceSession));
         }
@@ -140,10 +130,7 @@ namespace OrderingSystem.Application.Services
             await _deviceSessionRepository.UpdateDeviceSessionAsync(deviceSession);
 
             // Real-Time Notification: Notify the specific guest that they have been approved
-            //await _hubContext.Clients.Group(deviceSession.DeviceSessionId.ToString()).SendAsync("ReceiveApprovalNotification", new
-            //{
-            //    Message = "Your request to join the table has been approved."
-            //});
+            await _notifier.NotifyGuestOfApprovalAsync(deviceSession.DeviceSessionId);
 
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));
         }

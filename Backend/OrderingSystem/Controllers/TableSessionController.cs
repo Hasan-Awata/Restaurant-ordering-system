@@ -8,23 +8,23 @@ namespace OrderingSystem.WebApi.Controllers
     [Route("api/tables/sessions")]
     public class TableSessionsController : ControllerBase
     {
-        private readonly ISessionCommand _commandService;
-        private readonly ITableSessionQuery _queryService;
+        private readonly ISessionCommand _sessionCommandService;
+        private readonly ITableSessionQuery _sessionQueryService;
 
         // Explicit dependency routing
         public TableSessionsController(
-            ISessionCommand commandService,
-            ITableSessionQuery queryService)
+            ISessionCommand sessionCommandService,
+            ITableSessionQuery sessionQueryService)
         {
-            _commandService = commandService;
-            _queryService = queryService;
+            _sessionCommandService = sessionCommandService;
+            _sessionQueryService = sessionQueryService;
         }
 
         // 1. WRITE ENDPOINT (Command Path)
-        [HttpPost("activate")]
-        public async Task<IActionResult> Activate([FromBody] ActivateSessionByAdminRequest request)
+        [HttpPost("qr")]
+        public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
-            var response = await _commandService.ActivateAsync(request);
+            var response = await _sessionCommandService.ProcessTableQrCodeAsync(request);
             return Ok(response);
         }
 
@@ -32,7 +32,7 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {
-            var response = await _queryService.GetActiveSessionByTableAsync(tableId);
+            var response = await _sessionQueryService.GetActiveSessionByTableAsync(tableId);
             if (response == null) return NotFound($"No active session found for table ID {tableId}.");
 
             return Ok(response);
