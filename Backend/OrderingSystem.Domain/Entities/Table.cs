@@ -9,9 +9,10 @@ namespace OrderingSystem.Domain.Entities
     {
         public int TableId { get; set; }
         public int TableNumber { get; set; }
+        public string QrCode { get; set; } = string.Empty;
         public enTableStatus Status { get; set; }
 
         // Navigation
-        public ICollection<TableSession> Sessions { get; set; } = new List<TableSession>();
+        public TableSession Session { get; set; } = null!;
     }
 }

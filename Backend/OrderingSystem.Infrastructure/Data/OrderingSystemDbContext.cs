@@ -16,7 +16,7 @@ namespace OrderingSystem.Infrastructure.Data
         public DbSet<TableSession> TableSessions { get; set; }
         public DbSet<Category> Categories { get; set; }
         public DbSet<MenuItem> MenuItems { get; set; }
-        public DbSet<SessionDevice> SessionDevices { get; set; }
+        public DbSet<DeviceSession> SessionDevices { get; set; }
         public DbSet<Order> Orders { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }
 
@@ -41,16 +41,16 @@ namespace OrderingSystem.Infrastructure.Data
             // 3. TableSessions
             modelBuilder.Entity<TableSession>(entity =>
             {
-                entity.HasKey(e => e.SessionId);
+                entity.HasKey(e => e.TableSessionId);
 
                 // Foreign Key to Table
                 entity.HasOne(e => e.Table)
-                      .WithMany(t => t.Sessions)
+                      .WithMany(t => t.Session)
                       .HasForeignKey(e => e.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
 
                 // Foreign Key to Waiter (User)
-                entity.HasOne(e => e.Waiter)
+                entity.HasOne(e => e.Host)
                       .WithMany(u => u.TableSessions)
                       .HasForeignKey(e => e.WaiterId)
                       .OnDelete(DeleteBehavior.Restrict);
@@ -79,14 +79,14 @@ namespace OrderingSystem.Infrastructure.Data
             });
 
             // 6. SessionDevices
-            modelBuilder.Entity<SessionDevice>(entity =>
+            modelBuilder.Entity<DeviceSession>(entity =>
             {
-                entity.HasKey(e => e.DeviceId);
+                entity.HasKey(e => e.DeviceSessionId);
                 entity.Property(e => e.DeviceToken).HasMaxLength(500);
 
-                entity.HasOne(e => e.Session)
+                entity.HasOne(e => e.TableSession)
                       .WithMany(s => s.Devices)
-                      .HasForeignKey(e => e.SessionId)
+                      .HasForeignKey(e => e.TableSessionId)
                       .OnDelete(DeleteBehavior.Cascade);
             });
 

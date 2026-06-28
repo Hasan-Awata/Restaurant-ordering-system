@@ -1,12 +1,19 @@
-﻿using System;
+﻿using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
 namespace OrderingSystem.Application.DTOs
 {
     // Command Payloads
-    public record ActivateSessionRequest(int TableId, int WaiterId);
+    public record ProcessQrCodeRequest(string qrCode, Guid? deviceSessionId = null);
+    public record ApproveJoiningSessionRequest(Guid deviceSessionId);
+    public record DeactivateSessionByAdminRequest(int TableId);
+
 
     // Query/Command Response Payloads
-    public record SessionResponse(int SessionId, int TableNumber, string Status, string SessionToken, DateTime CreatedAt);
+    public record DeviceSessionResponse(Guid DeviceSessionId, enDeviceRole DeviceRole, bool IsApproved);
+    public record TableSessionResponse(Guid TableSessionId, int TableNumber, enSessionStatus Status, DateTime CreatedAt);
+    public record SessionResponse(TableSessionResponse TableSession, DeviceSessionResponse? DeviceSession);
 }

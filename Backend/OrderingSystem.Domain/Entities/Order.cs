@@ -16,7 +16,7 @@ namespace OrderingSystem.Domain.Entities
 
         // Navigation
         public TableSession Session { get; set; }
-        public SessionDevice Device { get; set; }
+        public DeviceSession Device { get; set; }
         public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
     }
 }

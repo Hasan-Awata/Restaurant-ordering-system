@@ -1,0 +1,1211 @@
+PROJECT ARCHITECTURE SNAPSHOT
+=============================
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\appsettings.Development.json
+----------------------------------------
+{
+  "ConnectionStrings": {
+    "DefaultConnection": ""
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\appsettings.json
+----------------------------------------
+{
+  "ConnectionStrings": {
+    "DefaultConnection": ""
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\OrderingSystem.csproj
+----------------------------------------
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OrderingSystem.Application\OrderingSystem.Application.csproj" />
+    <ProjectReference Include="..\OrderingSystem.Domain\OrderingSystem.Domain.csproj" />
+    <ProjectReference Include="..\OrderingSystem.Infrastructure\OrderingSystem.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Program.cs
+----------------------------------------
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Infrastructure.Repositories;
+using System.Text;
+using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// ── Caching ──────────────────────────────────────────────────────────────
+builder.Services.AddMemoryCache(); 
+
+// ── Controllers & JSON ───────────────────────────────────────────────────
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+
+// ── Rate Limiting ────────────────────────────────────────────────────────
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("Fixed", limiterOptions =>
+    {
+        limiterOptions.PermitLimit = 100;
+        limiterOptions.Window = TimeSpan.FromMinutes(1);
+        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        limiterOptions.QueueLimit = 2; 
+    });
+
+    options.OnRejected = async (context, token) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsync("Too many requests. Please try again later.", cancellationToken: token);
+    };
+});
+
+// ── Swagger with JWT Bearer ───────────────────────────────────────────────
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Description = "Enter your JWT token.",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
+
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("Bearer", document)] = []
+    });
+});
+
+
+// ── Dependency Injections ──────────────────────────────────────────────────
+// In Program.cs or your Infrastructure dependency injection extension:
+
+builder.Services.AddScoped<TableSessionRepository>();
+
+// Resolve both interfaces using the same concrete type registration
+builder.Services.AddScoped<ITableSessionRepository>(provider =>
+    provider.GetRequiredService<TableSessionRepository>());
+
+builder.Services.AddScoped<ITableSessionQuery>(provider =>
+    provider.GetRequiredService<TableSessionRepository>());
+
+// ── JWT Authentication ────────────────────────────────────────────────────
+var jwtSettings = builder.Configuration.GetSection("JwtSettings");
+var secretKey = jwtSettings["SecretKey"]!;
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtSettings["Issuer"],
+        ValidAudience = jwtSettings["Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(
+        Encoding.UTF8.GetBytes(secretKey))
+    };
+});
+
+builder.Services.AddAuthorization();
+
+// ── Allowing all requests for testing ────────────────────────────────────────────────────
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll",
+        builder => builder.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+var app = builder.Build();
+
+app.UseExceptionHandler();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseCors("AllowAll"); // Delete on actual deployment
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers().RequireRateLimiting("Fixed");
+
+app.Run();
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TableSessionController.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Mvc;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.DTOs;
+
+namespace OrderingSystem.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/tables/sessions")]
+    public class TableSessionsController : ControllerBase
+    {
+        private readonly ISessionCommand _commandService;
+        private readonly ITableSessionQuery _queryService;
+
+        // Explicit dependency routing
+        public TableSessionsController(
+            ISessionCommand commandService,
+            ITableSessionQuery queryService)
+        {
+            _commandService = commandService;
+            _queryService = queryService;
+        }
+
+        // 1. WRITE ENDPOINT (Command Path)
+        [HttpPost("activate")]
+        public async Task<IActionResult> Activate([FromBody] ActivateSessionByAdminRequest request)
+        {
+            var response = await _commandService.ActivateAsync(request);
+            return Ok(response);
+        }
+
+        // 2. READ ENDPOINT (Query Path)
+        [HttpGet("active/{tableId}")]
+        public async Task<IActionResult> GetActiveSession(int tableId)
+        {
+            var response = await _queryService.GetActiveSessionByTableAsync(tableId);
+            if (response == null) return NotFound($"No active session found for table ID {tableId}.");
+
+            return Ok(response);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Properties\launchSettings.json
+----------------------------------------
+﻿{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5148",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    "https": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "https://localhost:7070;http://localhost:5148",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\OrderingSystem.Application.csproj
+----------------------------------------
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OrderingSystem.Domain\OrderingSystem.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\SessionRecords.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.DTOs
+{
+    // Command Payloads
+    public record ProcessQrCodeRequest(string qrCode, Guid? deviceSessionId = null);
+    public record DeactivateSessionByAdminRequest(int TableId);
+
+
+    // Query/Command Response Payloads
+    public record DeviceSessionResponse(int SessionId, int DeviceId, string DeviceToken, enDeviceRole DeviceRole, bool IsApproved);
+    public record TableSessionResponse(int SessionId, int TableNumber, string Status, string SessionToken, DateTime CreatedAt);
+    public record SessionResponse(TableSessionResponse TableSession, DeviceSessionResponse? DeviceSession);
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\DeviceSessionInterfaces\IDeviceSessionCommand.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Common;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.DeviceSessionInterfaces
+{
+    public interface IDeviceSessionCommand
+    {
+        Task<Result<TableSessionResponse>> DeactivateAsync(DeactivateSessionByAdminRequest request);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\DeviceSessionInterfaces\IDeviceSessionQuery.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Entities;
+
+namespace OrderingSystem.Application.Interfaces.DeviceSessionInterfaces
+{
+    public interface IDeviceSessionQuery
+    {
+        public Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\DeviceSessionInterfaces\IDeviceSessionRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.DeviceSessionInterfaces
+{
+    public interface IDeviceSessionRepository
+    {
+        public Task AddSessionAsync(DeviceSession session);
+        public Task UpdateSessionAsync(DeviceSession session);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableInterfaces\ITableRepository.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableInterfaces
+{
+    public interface ITableRepository
+    {
+
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableSessionInterfaces\ISessionCommand.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Common;
+
+namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
+{
+    public interface ISessionCommand
+    {
+        Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableSessionInterfaces\ITableSessionQuery.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
+{
+    public interface ITableSessionQuery
+    {
+        Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableSessionInterfaces\ITableSessionRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
+{
+    public interface ITableSessionRepository
+    {
+        public Task<Table?> GetTableWithActiveSessionAsync(string qrCode);
+        public Task AddSessionAsync(TableSession session);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Mappers\SessionsMappers.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using System;
+
+namespace OrderingSystem.Application.Mappers
+{
+    public static class SessionsMappers
+    {
+        // ── WRITE PATH ──────────────────────────────────────────────────────────
+
+
+        // ── READ PATH ───────────────────────────────────────────────────────────
+
+        public static TableSessionResponse ToResponse(this TableSession entity)
+        {
+            return new TableSessionResponse(
+                entity.TableId, // Assuming you adjust the record to match
+                entity.Table?.TableNumber ?? 0,
+                entity.Status.ToString(),
+                entity.TableSessionId.ToString("N"), // Use the ID as the token string
+                entity.CreatedAt
+            );
+        }
+
+        public static DeviceSessionResponse ToResponse(this DeviceSession entity)
+        {
+            return new DeviceSessionResponse(
+                0, // Adjust DTO if DeviceSessionId is a Guid now
+                entity.TableSessionId.GetHashCode(), // Example adjustment
+                entity.DeviceSessionId.ToString("N"), // Use ID as token
+                entity.Role,
+                entity.IsApproved
+            );
+        }
+
+        public static SessionResponse ToResponse(this TableSession table, DeviceSession? device = null)
+        {
+            return new SessionResponse(table.ToResponse(), device?.ToResponse());
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\SessionCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Mappers;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Application.Interfaces.DeviceSessionInterfaces;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Entities;
+//using Microsoft.AspNetCore.SignalR; 
+//using OrderingSystem.Application.Hubs;
+
+namespace OrderingSystem.Application.Services
+{
+    public class SessionCommandService : ISessionCommand
+    {
+        private readonly ITableSessionRepository _tableSessionRepository;
+        private readonly ITableRepository _tableRepository;
+        private readonly IDeviceSessionRepository _deviceSessionRepository;
+        //private readonly IHubContext<OrderingHub> _hubContext; // Injected Hub Context
+
+        public SessionCommandService(
+            ITableSessionRepository tableSessionRepository,
+            IDeviceSessionRepository deviceSessionRepository,
+            ITableRepository tableRepository)
+            //IHubContext<OrderingHub> hubContext)
+        {
+            _tableSessionRepository = tableSessionRepository;
+            _deviceSessionRepository = deviceSessionRepository;
+            _tableRepository = tableRepository;
+            //_hubContext = hubContext;
+        }
+
+        public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request)
+        {
+            var table = await _tableSessionRepository.GetTableWithActiveSessionAsync(request.qrCode);
+
+            if (table == null)
+            {
+                return Result<SessionResponse>.Failure("Table was not found.", enErrorType.NotFound);
+            }
+
+            // A live table session is running
+            if (table.Session != null)
+            {
+                // Corrected Logic: If they have an ID, they are reconnecting/accessing
+                if (request.deviceSessionId.HasValue)
+                {
+                    return await AccessTableSessionAsync(table.Session.TableSessionId, request.deviceSessionId.Value);
+                }
+
+                // If they don't have an ID, they are a new guest joining the existing session
+                Guid newGuestDeviceId = Guid.CreateVersion7();
+                return await JoinTableSessionAsync(table.Session, newGuestDeviceId);
+            }
+
+            // No active session -> Brand new activation request by a Host
+            Guid newHostDeviceId = Guid.CreateVersion7();
+            return await ActivateTableSessionAsync(table.TableId, newHostDeviceId);
+        }
+
+        private async Task<Result<SessionResponse>> ActivateTableSessionAsync(int tableId, Guid deviceSessionId)
+        {
+            var tableSession = new TableSession
+            {
+                TableSessionId = Guid.CreateVersion7(),
+                TableId = tableId,
+                CreatedAt = DateTime.UtcNow,
+                Status = enSessionStatus.PendingActivation,
+                ClosedAt = null,
+            };
+
+            var deviceSession = new DeviceSession
+            {
+                DeviceSessionId = deviceSessionId,
+                TableSessionId = tableSession.TableSessionId,
+                Role = enDeviceRole.Host,
+                IsApproved = true, // The Host is auto-approved by default, waiting on cashier
+                TableSession = tableSession,
+            };
+
+            await _tableSessionRepository.AddSessionAsync(tableSession);
+            await _deviceSessionRepository.AddSessionAsync(deviceSession);
+
+            // Real-Time Notification: Send alert to all connected Cashiers/Admins
+            //await _hubContext.Clients.Group("Admins").SendAsync("ReceiveActivationRequest", new
+            //{
+            //    TableId = tableId,
+            //    TableSessionId = tableSession.TableSessionId,
+            //    Message = $"Table {tableId} is requesting activation."
+            //});
+
+            return Result<SessionResponse>.Success(tableSession.ToResponse(deviceSession));
+        }
+
+        private async Task<Result<SessionResponse>> JoinTableSessionAsync(TableSession tableSession, Guid deviceSessionId)
+        {
+            var deviceSession = new DeviceSession
+            {
+                DeviceSessionId = deviceSessionId,
+                TableSessionId = tableSession.TableSessionId,
+                Role = enDeviceRole.Guest, 
+                IsApproved = false,        
+            };
+
+            await _deviceSessionRepository.AddSessionAsync(deviceSession);
+
+            // Real-Time Notification: Alert the specific Table Session Room (The Host)
+            // The Host's frontend will listen to their specific tableSessionId group string
+            //await _hubContext.Clients.Group(tableSession.TableSessionId.ToString()).SendAsync("ReceiveJoinRequest", new
+            //{
+            //    DeviceSessionId = deviceSessionId,
+            //    Message = "A new guest is requesting to join your table."
+            //});
+
+            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(tableSession, deviceSession));
+        }
+
+        private async Task<Result<SessionResponse>> AccessTableSessionAsync(Guid tableSessionId, Guid deviceSessionId)
+        {
+            // Implementation Note: Fetch the device from DB. 
+            // If it exists and matches tableSessionId, map to success response to restore UI state.
+            // If it doesn't match, return an unauthorized/hack attempt failure.
+            return Result<SessionResponse>.Failure("Not Implemented", enErrorType.Failure);
+        }
+
+        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningRequest request)
+        {
+            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.deviceSessionId);
+
+            if (deviceSession == null)
+            {
+                return Result<SessionResponse>.Failure("Device session not found.", enErrorType.NotFound);
+            }
+
+            deviceSession.IsApproved = true;
+            await _deviceSessionRepository.UpdateSessionAsync(deviceSession);
+
+            // Real-Time Notification: Notify the specific guest that they have been approved
+            //await _hubContext.Clients.Group(deviceSession.DeviceSessionId.ToString()).SendAsync("ReceiveApprovalNotification", new
+            //{
+            //    Message = "Your request to join the table has been approved."
+            //});
+
+            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));
+        }
+
+        public async Task<Result<SessionResponse>> DeactivateAsync(DeactivateSessionByAdminRequest request)
+        {
+            return Result<SessionResponse>.Failure("Not Implemented", enErrorType.Failure);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\OrderingSystem.Domain.csproj
+----------------------------------------
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Common\Result.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Enums;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Common
+{
+    public class Result
+    {
+        public bool IsSuccess { get; }
+        public string? ErrorMessage { get; }
+        public enErrorType ErrorType { get; }
+
+        protected Result(bool isSuccess, string? errorMessage, enErrorType errorType)
+        {
+            IsSuccess = isSuccess;
+            ErrorMessage = errorMessage;
+            ErrorType = errorType;
+        }
+
+        public static Result Success() => new(true, null, enErrorType.None);
+        public static Result Failure(string message, enErrorType errorType = enErrorType.Failure)
+            => new(false, message, errorType);
+    }
+
+    public class Result<T> : Result
+    {
+        public T? Value { get; }
+
+        private Result(T? value, bool isSuccess, string? errorMessage, enErrorType errorType)
+            : base(isSuccess, errorMessage, errorType)
+        {
+            Value = value;
+        }
+
+        public static Result<T> Success(T value) => new(value, true, null, enErrorType.None);
+        public static new Result<T> Failure(string message, enErrorType errorType = enErrorType.Failure)
+            => new(default, false, message, errorType);
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Category.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class Category
+    {
+        public int CategoryId { get; set; }
+        public string NameAr { get; set; } = string.Empty;
+        public string NameEn { get; set; } = string.Empty;
+        public bool IsAvailable { get; set; }
+
+        // Navigation
+        public ICollection<MenuItem> MenuItems { get; set; } = new List<MenuItem>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\DeviceSession.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums; 
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class DeviceSession
+    {
+        public Guid DeviceSessionId { get; set; } // Also acts as the secure token for the device session
+        public Guid TableSessionId { get; set; }
+        public enDeviceRole Role { get; set; }
+        public bool IsApproved { get; set; }
+
+        // Navigation Properties
+        public TableSession TableSession { get; set; } = null!; // Avoid = new TableSession() to prevent EF Core from creating a new database row
+        public ICollection<Order> Orders { get; set; } = new List<Order>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\MenuItem.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class MenuItem
+    {
+        public int MenuItemId { get; set; }
+        public int CategoryId { get; set; }
+        public string NameAr { get; set; } = string.Empty;
+        public string NameEn { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public string ImageUrl { get; set; } = string.Empty;
+        public bool IsAvailable { get; set; }
+
+        // Navigation
+        public Category Category { get; set; } = new Category();
+        public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Order.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class Order
+    {
+        public int OrderId { get; set; }
+        public int SessionId { get; set; }
+        public int DeviceId { get; set; }
+        public decimal TotalAmount { get; set; }
+        public enOrderStatusType OrderStatus { get; set; }
+        public DateTime CreatedAt { get; set; }
+
+        // Navigation
+        public TableSession Session { get; set; }
+        public DeviceSession Device { get; set; }
+        public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\OrderItem.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class OrderItem
+    {
+        public int OrderItemId { get; set; }
+        public int OrderId { get; set; }
+        public int MenuItemId { get; set; }
+        public int Quantity { get; set; }
+        public decimal UnitPrice { get; set; }
+
+        // Navigation
+        public Order Order { get; set; } = new Order();
+        public MenuItem MenuItem { get; set; } = new MenuItem();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Table.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class Table
+    {
+        public int TableId { get; set; }
+        public int TableNumber { get; set; }
+        public string QrCode { get; set; } = string.Empty;
+        public enTableStatus Status { get; set; }
+
+        // Navigation
+        public TableSession Session { get; set; } = null!;
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\TableSession.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class TableSession
+    {
+        public Guid TableSessionId { get; set; } // Also acts as the secure token for the table session
+        public int TableId { get; set; }
+        public enSessionStatus Status { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? ClosedAt { get; set; } // Nullable since it might not be closed yet
+
+        // Navigation Properties
+        // Using null! tells the compiler EF Core will handle populating this when loaded
+        public Table Table { get; set; } = null!;
+
+        // Initializing collections is correct and prevents NullReferenceExceptions
+        public ICollection<DeviceSession> Devices { get; set; } = new List<DeviceSession>();
+        public ICollection<Order> Orders { get; set; } = new List<Order>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\User.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class User
+    {
+        public int UserId { get; set; }
+        public string FullName { get; set; } = string.Empty;
+        public string PasswordHash { get; set; } = string.Empty;
+        public enRoleType Role { get; set; }
+
+        // Navigation
+        public ICollection<TableSession> TableSessions { get; set; } = new List<TableSession>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enDeviceRole.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enDeviceRole
+    {
+        Host = 1,
+        Guest = 2
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enErrorType.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enErrorType
+    {
+        None = 0,
+        Validation = 400,
+        NotFound = 404,
+        BalanceViolation = 422,
+        Failure = 500
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enRoleType.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enRoleType
+    {
+        Admin = 1,
+        Accountant = 2,
+        Waiter = 3
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enSessionStatus.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enSessionStatus
+    {
+        PendingActivation = 1,
+        Active = 2,
+        Closed = 3
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enTableStatus.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enTableStatus
+    {
+        Available = 1,
+        Occupied = 2,
+        Billing = 3
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\OrderStatusType.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enOrderStatusType
+    {
+        Pending = 1,
+        Preparing = 2,
+        Served = 3,
+        Cancelled = 4
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\OrderingSystem.Infrastructure.csproj
+----------------------------------------
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.9" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OrderingSystem.Application\OrderingSystem.Application.csproj" />
+    <ProjectReference Include="..\OrderingSystem.Domain\OrderingSystem.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Data\OrderingSystemDbContext.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Domain.Entities;
+
+namespace OrderingSystem.Infrastructure.Data
+{
+    public class OrderingSystemDbContext : DbContext
+    {
+        public OrderingSystemDbContext(DbContextOptions<OrderingSystemDbContext> options)
+            : base(options)
+        {
+        }
+
+        // DbSets representing your tables
+        public DbSet<User> Users { get; set; }
+        public DbSet<Table> Tables { get; set; }
+        public DbSet<TableSession> TableSessions { get; set; }
+        public DbSet<Category> Categories { get; set; }
+        public DbSet<MenuItem> MenuItems { get; set; }
+        public DbSet<DeviceSession> SessionDevices { get; set; }
+        public DbSet<Order> Orders { get; set; }
+        public DbSet<OrderItem> OrderItems { get; set; }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+
+            // 1. Users
+            modelBuilder.Entity<User>(entity =>
+            {
+                entity.HasKey(e => e.UserId);
+                entity.Property(e => e.FullName).IsRequired().HasMaxLength(255);
+                entity.Property(e => e.PasswordHash).IsRequired();
+            });
+
+            // 2. Tables
+            modelBuilder.Entity<Table>(entity =>
+            {
+                entity.HasKey(e => e.TableId);
+            });
+
+            // 3. TableSessions
+            modelBuilder.Entity<TableSession>(entity =>
+            {
+                entity.HasKey(e => e.TableSessionId);
+
+                // Foreign Key to Table
+                entity.HasOne(e => e.Table)
+                      .WithMany(t => t.Session)
+                      .HasForeignKey(e => e.TableId)
+                      .OnDelete(DeleteBehavior.Restrict);
+
+                // Foreign Key to Waiter (User)
+                entity.HasOne(e => e.Host)
+                      .WithMany(u => u.TableSessions)
+                      .HasForeignKey(e => e.WaiterId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // 4. Categories
+            modelBuilder.Entity<Category>(entity =>
+            {
+                entity.HasKey(e => e.CategoryId);
+                entity.Property(e => e.NameAr).HasMaxLength(255);
+                entity.Property(e => e.NameEn).HasMaxLength(255);
+            });
+
+            // 5. MenuItems
+            modelBuilder.Entity<MenuItem>(entity =>
+            {
+                entity.HasKey(e => e.MenuItemId);
+                entity.Property(e => e.Price).HasColumnType("decimal(18,2)"); // Prevents EF Core warnings
+                entity.Property(e => e.NameAr).HasMaxLength(255);
+                entity.Property(e => e.NameEn).HasMaxLength(255);
+
+                entity.HasOne(e => e.Category)
+                      .WithMany(c => c.MenuItems)
+                      .HasForeignKey(e => e.CategoryId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // 6. SessionDevices
+            modelBuilder.Entity<DeviceSession>(entity =>
+            {
+                entity.HasKey(e => e.DeviceSessionId);
+                entity.Property(e => e.DeviceToken).HasMaxLength(500);
+
+                entity.HasOne(e => e.TableSession)
+                      .WithMany(s => s.Devices)
+                      .HasForeignKey(e => e.TableSessionId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // 7. Orders
+            modelBuilder.Entity<Order>(entity =>
+            {
+                entity.HasKey(e => e.OrderId);
+                entity.Property(e => e.TotalAmount).HasColumnType("decimal(18,2)");
+
+                entity.HasOne(e => e.Session)
+                      .WithMany(s => s.Orders)
+                      .HasForeignKey(e => e.SessionId)
+                      .OnDelete(DeleteBehavior.Restrict); // Prevent cascading cycles
+
+                entity.HasOne(e => e.Device)
+                      .WithMany(d => d.Orders)
+                      .HasForeignKey(e => e.DeviceId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // 8. OrderItems
+            modelBuilder.Entity<OrderItem>(entity =>
+            {
+                entity.HasKey(e => e.OrderItemId);
+                entity.Property(e => e.UnitPrice).HasColumnType("decimal(18,2)");
+
+                entity.HasOne(e => e.Order)
+                      .WithMany(o => o.OrderItems)
+                      .HasForeignKey(e => e.OrderId)
+                      .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(e => e.MenuItem)
+                      .WithMany(m => m.OrderItems)
+                      .HasForeignKey(e => e.MenuItemId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+        }
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\TableSessionRepository.cs
+----------------------------------------
+﻿// File: OrderingSystem.Infrastructure/Services/TableSessionRepository.cs
+
+using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Mappers;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+
+namespace OrderingSystem.Infrastructure.Repositories
+{
+    public class TableSessionRepository : ITableSessionRepository, ITableSessionQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableSessionRepository(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        // ==========================================
+        // WRITE PATH (ITableSessionRepository)
+        // ==========================================
+        public async Task<Table?> GetTableWithActiveSessionAsync(int tableId)
+        {
+            // Tracks entity state for changes
+            return await _context.Tables.FirstOrDefaultAsync(t => t.TableId == tableId);
+        }
+
+        public async Task AddSessionAsync(TableSession session)
+        {
+            _context.TableSessions.Add(session);
+            await _context.SaveChangesAsync();
+        }
+
+        // ==========================================
+        // READ PATH (ITableSessionQueryService)
+        // ==========================================
+        public async Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId)
+        {
+            var entity = await _context.TableSessions
+                .Include(s => s.Table)
+                .AsNoTracking() // Read optimization
+                .FirstOrDefaultAsync(s => s.TableId == tableId && s.Status == enSessionStatus.Active);
+
+            return entity?.ToResponse();
+        }
+    }
+}
+

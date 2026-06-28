@@ -2,36 +2,33 @@
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
 using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace OrderingSystem.Application.Mappers
 {
     public static class SessionsMappers
     {
-        // For Write Path (Maps Request DTO -> Domain Entity)
-        public static TableSession ToEntity(this ActivateSessionRequest request, string secureToken)
+        public static TableSessionResponse ToResponse(this TableSession entity)
         {
-            return new TableSession
-            {
-                TableId = request.TableId,
-                WaiterId = request.WaiterId,
-                SessionToken = secureToken,
-                Status = enSessionStatus.Active,
-                CreatedAt = DateTime.UtcNow
-            };
-        }
-
-        // For Read Path (Maps Domain Entity -> Response Record)
-        public static SessionResponse ToResponse(this TableSession entity)
-        {
-            return new SessionResponse(
-                entity.SessionId,
+            return new TableSessionResponse(
+                entity.TableSessionId,
                 entity.Table?.TableNumber ?? 0,
-                entity.Status.ToString(),
-                entity.SessionToken,
+                entity.Status,
                 entity.CreatedAt
             );
+        }
+
+        public static DeviceSessionResponse ToResponse(this DeviceSession entity)
+        {
+            return new DeviceSessionResponse(
+                entity.DeviceSessionId,  
+                entity.Role,
+                entity.IsApproved
+            );
+        }
+
+        public static SessionResponse ToResponse(this TableSession table, DeviceSession? device = null)
+        {
+            return new SessionResponse(table.ToResponse(), device?.ToResponse());
         }
     }
 }

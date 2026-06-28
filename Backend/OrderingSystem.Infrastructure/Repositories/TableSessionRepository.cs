@@ -12,7 +12,7 @@ using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 
 namespace OrderingSystem.Infrastructure.Repositories
 {
-    public class TableSessionRepository : ITableSessionRepository, ITableSessionQuery
+    public class TableSessionRepository : ITableSessionRepository
     {
         private readonly OrderingSystemDbContext _context;
 
@@ -21,32 +21,11 @@ namespace OrderingSystem.Infrastructure.Repositories
             _context = context;
         }
 
-        // ==========================================
-        // WRITE PATH (ITableSessionRepository)
-        // ==========================================
-        public async Task<Table?> GetTableWithActiveSessionAsync(int tableId)
-        {
-            // Tracks entity state for changes
-            return await _context.Tables.FirstOrDefaultAsync(t => t.TableId == tableId);
-        }
 
-        public async Task SaveSessionAsync(TableSession session)
+        public async Task AddSessionAsync(TableSession session)
         {
             _context.TableSessions.Add(session);
             await _context.SaveChangesAsync();
-        }
-
-        // ==========================================
-        // READ PATH (ITableSessionQueryService)
-        // ==========================================
-        public async Task<SessionResponse?> GetActiveSessionByTableAsync(int tableId)
-        {
-            var entity = await _context.TableSessions
-                .Include(s => s.Table)
-                .AsNoTracking() // Read optimization
-                .FirstOrDefaultAsync(s => s.TableId == tableId && s.Status == enSessionStatus.Active);
-
-            return entity?.ToResponse();
         }
     }
 }
