@@ -8,12 +8,12 @@ namespace OrderingSystem.WebApi.Controllers
     [Route("api/tables/sessions")]
     public class TableSessionsController : ControllerBase
     {
-        private readonly ISessionCommand _sessionCommandService;
+        private readonly ISessionCommandService _sessionCommandService;
         private readonly ITableSessionQuery _sessionQueryService;
 
         // Explicit dependency routing
         public TableSessionsController(
-            ISessionCommand sessionCommandService,
+            ISessionCommandService sessionCommandService,
             ITableSessionQuery sessionQueryService)
         {
             _sessionCommandService = sessionCommandService;

@@ -1,10 +1,15 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
-using OrderingSystem.Infrastructure.Hubs;
+using OrderingSystem.Application.Services;
+using OrderingSystem.Infrastructure.Data;
+using OrderingSystem.Infrastructure.ExternalServices.Notifications;
 using OrderingSystem.Infrastructure.Notifications;
 using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
@@ -60,13 +65,25 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// ── Database Context ──────────────────────────────────────────────────────
+builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // ── Dependency Injections ──────────────────────────────────────────────────
 builder.Services.AddSignalR();
 builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
 
+builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
+
 builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
 builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
+
+builder.Services.AddScoped<IDeviceSessionRepository, DeviceSessionRepository>();
+builder.Services.AddScoped<IDeviceSessionQuery, DeviceSessionQuery>();
+
+builder.Services.AddScoped<ITableRepository, TableRepository>();
+builder.Services.AddScoped<ITableCommandService, TableCommandService>();
+builder.Services.AddScoped<ITableQuery, TableQuery>();
 
 
 // ── JWT Authentication ────────────────────────────────────────────────────
@@ -104,8 +121,6 @@ builder.Services.AddCors(options =>
 
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
-
-app.UseExceptionHandler();
 
 if (app.Environment.IsDevelopment())
 {

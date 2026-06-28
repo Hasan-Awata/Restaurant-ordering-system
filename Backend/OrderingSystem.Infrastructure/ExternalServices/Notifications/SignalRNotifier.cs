@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using OrderingSystem.Application.Interfaces.Notifications;
-using OrderingSystem.Infrastructure.Hubs;
+using OrderingSystem.Infrastructure.ExternalServices.Notifications;
 
 namespace OrderingSystem.Infrastructure.Notifications
 {

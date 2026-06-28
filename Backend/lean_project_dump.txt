@@ -14,7 +14,13 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\appsettin
       "Microsoft.AspNetCore": "Warning"
     }
   },
-  "AllowedHosts": "*"
+  "AllowedHosts": "*",
+
+  "JwtSettings": {
+    "SecretKey": "this_is_my_dummy_secret",
+    "Issuer": "https://localhost:5148",
+    "Audience": "https://localhost:5148"
+  }
 }
 
 
@@ -30,7 +36,15 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\appsettin
       "Microsoft.AspNetCore": "Warning"
     }
   },
-  "AllowedHosts": "*"
+  "AllowedHosts": "*",
+  "ApplicationSettings": {
+    "JWT_Secret": "this_is_my_dummy_secret"
+  },
+  "JwtData": {
+    "Issuer": "https://localhost:5148",
+    "Audience": "https://localhost:5148",
+    "SigningKey": "some-long-secret-key-that-is-NOT-in-your-appsetting-file"
+  }
 }
 
 
@@ -64,11 +78,16 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Program.c
 ----------------------------------------
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
-using OrderingSystem.Infrastructure.Hubs;
+using OrderingSystem.Application.Services;
+using OrderingSystem.Infrastructure.Data;
+using OrderingSystem.Infrastructure.ExternalServices.Notifications;
 using OrderingSystem.Infrastructure.Notifications;
 using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
@@ -124,13 +143,21 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// ── Database Context ──────────────────────────────────────────────────────
+builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // ── Dependency Injections ──────────────────────────────────────────────────
 builder.Services.AddSignalR();
 builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
 
+builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
+
 builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
 builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
+
+builder.Services.AddScoped<ITableCommandService, TableCommandService>();
+builder.Services.AddScoped<ITableQuery, TableQuery>();
 
 
 // ── JWT Authentication ────────────────────────────────────────────────────
@@ -169,8 +196,6 @@ builder.Services.AddCors(options =>
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
-app.UseExceptionHandler();
-
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -189,6 +214,77 @@ app.MapControllers().RequireRateLimiting("Fixed");
 app.Run();
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TableController.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Mvc;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/tables")]
+    public class TablesController : ControllerBase
+    {
+        private readonly ITableCommandService _tableCommandService;
+        private readonly ITableQuery _tableQueryService;
+
+        public TablesController(ITableCommandService tableCommandService, ITableQuery tableQueryService)
+        {
+            _tableCommandService = tableCommandService;
+            _tableQueryService = tableQueryService;
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> AddTable([FromBody] AddTableRequest request)
+        {
+            var result = await _tableCommandService.AddTableAsync(request);
+            if (!result.IsSuccess)
+            {
+                return result.ErrorType == enErrorType.Validation ? BadRequest(result.ErrorMessage) : StatusCode(500, result.ErrorMessage);
+            }
+            return CreatedAtAction(nameof(GetQrCode), new { tableId = result.Value!.TableId }, result.Value);
+        }
+
+        [HttpPut]
+        public async Task<IActionResult> UpdateTable([FromBody] UpdateTableRequest request)
+        {
+            var result = await _tableCommandService.UpdateTableAsync(request);
+            if (!result.IsSuccess)
+            {
+                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
+                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
+                return StatusCode(500, result.ErrorMessage);
+            }
+            return Ok(result.Value);
+        }
+
+        [HttpDelete("{tableId}")]
+        public async Task<IActionResult> DeleteTable(int tableId)
+        {
+            var result = await _tableCommandService.DeleteTableAsync(tableId);
+            if (!result.IsSuccess)
+            {
+                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
+                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
+                return StatusCode(500, result.ErrorMessage);
+            }
+            return NoContent();
+        }
+
+        [HttpGet("{tableId}/qrcode")]
+        public async Task<IActionResult> GetQrCode(int tableId)
+        {
+            var qrCode = await _tableQueryService.GetTableQrCodeAsync(tableId);
+            if (qrCode == null) return NotFound($"Table ID {tableId} not found.");
+
+            return Ok(new { QrCode = qrCode });
+        }
+    }
+}
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TableSessionController.cs
 ----------------------------------------
 ﻿using Microsoft.AspNetCore.Mvc;
@@ -201,23 +297,23 @@ namespace OrderingSystem.WebApi.Controllers
     [Route("api/tables/sessions")]
     public class TableSessionsController : ControllerBase
     {
-        private readonly ISessionCommand _commandService;
-        private readonly ITableSessionQuery _queryService;
+        private readonly ISessionCommandService _sessionCommandService;
+        private readonly ITableSessionQuery _sessionQueryService;
 
         // Explicit dependency routing
         public TableSessionsController(
-            ISessionCommand commandService,
-            ITableSessionQuery queryService)
+            ISessionCommandService sessionCommandService,
+            ITableSessionQuery sessionQueryService)
         {
-            _commandService = commandService;
-            _queryService = queryService;
+            _sessionCommandService = sessionCommandService;
+            _sessionQueryService = sessionQueryService;
         }
 
         // 1. WRITE ENDPOINT (Command Path)
-        [HttpPost("activate")]
-        public async Task<IActionResult> Activate([FromBody] ActivateSessionByAdminRequest request)
+        [HttpPost("qr")]
+        public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
-            var response = await _commandService.ActivateAsync(request);
+            var response = await _sessionCommandService.ProcessTableQrCodeAsync(request);
             return Ok(response);
         }
 
@@ -225,7 +321,7 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {
-            var response = await _queryService.GetActiveSessionByTableAsync(tableId);
+            var response = await _sessionQueryService.GetActiveSessionByTableAsync(tableId);
             if (response == null) return NotFound($"No active session found for table ID {tableId}.");
 
             return Ok(response);
@@ -242,7 +338,8 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Propertie
     "http": {
       "commandName": "Project",
       "dotnetRunMessages": true,
-      "launchBrowser": false,
+      "launchBrowser": true,
+      "launchUrl": "swagger",
       "applicationUrl": "http://localhost:5148",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
@@ -251,7 +348,8 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Propertie
     "https": {
       "commandName": "Project",
       "dotnetRunMessages": true,
-      "launchBrowser": false,
+      "launchBrowser": true,
+      "launchUrl": "swagger",
       "applicationUrl": "https://localhost:7070;http://localhost:5148",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
@@ -304,55 +402,21 @@ namespace OrderingSystem.Application.DTOs
 
 
 
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\DeviceSessionInterfaces\IDeviceSessionCommand.cs
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\TableRecords.cs
 ----------------------------------------
-﻿using OrderingSystem.Application.DTOs;
-using OrderingSystem.Domain.Common;
+﻿using OrderingSystem.Domain.Enums;
 using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace OrderingSystem.Application.Interfaces.DeviceSessionInterfaces
+namespace OrderingSystem.Application.DTOs
 {
-    public interface IDeviceSessionCommand
-    {
-        Task<Result<TableSessionResponse>> DeactivateAsync(DeactivateSessionByAdminRequest request);
-    }
-}
+    // Command Payloads
+    public record AddTableRequest(int TableNumber, int Floor);
+    public record UpdateTableRequest(int TableId, int TableNumber, int Floor, enTableStatus Status);
 
-
-
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\DeviceSessionInterfaces\IDeviceSessionQuery.cs
-----------------------------------------
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-using OrderingSystem.Domain.Entities;
-
-namespace OrderingSystem.Application.Interfaces.DeviceSessionInterfaces
-{
-    public interface IDeviceSessionQuery
-    {
-        public Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId);
-    }
-}
-
-
-
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\DeviceSessionInterfaces\IDeviceSessionRepository.cs
-----------------------------------------
-﻿using OrderingSystem.Domain.Entities;
-using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace OrderingSystem.Application.Interfaces.DeviceSessionInterfaces
-{
-    public interface IDeviceSessionRepository
-    {
-        public Task AddSessionAsync(DeviceSession session);
-        public Task UpdateDeviceSessionAsync(DeviceSession session);
-    }
+    // Query/Command Response Payloads
+    public record TableResponse(int TableId, int TableNumber, int Floor, string QrCode, enTableStatus Status);
 }
 
 
@@ -396,23 +460,60 @@ namespace OrderingSystem.Application.Interfaces.Notifications
 
 
 
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableInterfaces\ITableRepository.cs
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\IDeviceSessionCommand.cs
 ----------------------------------------
-﻿using System;
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Common;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace OrderingSystem.Application.Interfaces.TableInterfaces
+namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
 {
-    public interface ITableRepository
+    public interface IDeviceSessionCommand
     {
-
+        Task<Result<TableSessionResponse>> DeactivateAsync(DeactivateSessionByAdminRequest request);
     }
 }
 
 
 
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableSessionInterfaces\ISessionCommand.cs
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\IDeviceSessionQuery.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Entities;
+
+namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
+{
+    public interface IDeviceSessionQuery
+    {
+        public Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\IDeviceSessionRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
+{
+    public interface IDeviceSessionRepository
+    {
+        public Task AddSessionAsync(DeviceSession session);
+        public Task UpdateDeviceSessionAsync(DeviceSession session);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\ISessionCommandService.cs
 ----------------------------------------
 ﻿using OrderingSystem.Application.DTOs;
 using System;
@@ -422,7 +523,7 @@ using OrderingSystem.Domain.Common;
 
 namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 {
-    public interface ISessionCommand
+    public interface ISessionCommandService
     {
         public Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request);
         public Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request);
@@ -431,7 +532,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 
 
 
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableSessionInterfaces\ITableSessionQuery.cs
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\ITableSessionQuery.cs
 ----------------------------------------
 ﻿using OrderingSystem.Application.DTOs;
 using OrderingSystem.Domain.Entities;
@@ -451,7 +552,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 
 
 
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableSessionInterfaces\ITableSessionRepository.cs
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\ITableSessionRepository.cs
 ----------------------------------------
 ﻿using OrderingSystem.Domain.Entities;
 using System;
@@ -463,6 +564,66 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
     public interface ITableSessionRepository
     {
         public Task AddSessionAsync(TableSession session);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableInterfaces\ITableCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Common;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableInterfaces
+{
+    public interface ITableCommandService
+    {
+        Task<Result<TableResponse>> AddTableAsync(AddTableRequest request);
+        Task<Result<TableResponse>> UpdateTableAsync(UpdateTableRequest request);
+        Task<Result> DeleteTableAsync(int tableId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableInterfaces\ITableQuery.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableInterfaces
+{
+    public interface ITableQuery
+    {
+        public Task<string?> GetTableQrCodeAsync(int tableId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableInterfaces\ITableRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableInterfaces
+{
+    public interface ITableRepository
+    {
+        Task AddTableAsync(Table table);
+        Task UpdateTableAsync(Table table);
+        Task DeleteTableAsync(Table table);
+        Task<bool> ExistsAsync(int tableNumber, int floor);
+
+        // Reading methods (for business logic)
+        public Task<Table?> GetTableByIdAsync(int tableId);
     }
 }
 
@@ -513,35 +674,35 @@ using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Domain.Common;
-using OrderingSystem.Application.Interfaces.DeviceSessionInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 //using Microsoft.AspNetCore.SignalR; 
 //using OrderingSystem.Application.Hubs;
 
 namespace OrderingSystem.Application.Services
 {
-    public class SessionCommandService : ISessionCommand
+    public class SessionCommandService : ISessionCommandService
     {
         private readonly ITableSessionRepository _tableSessionRepository;
         private readonly ITableSessionQuery _tableSessionQuery;
         private readonly IDeviceSessionRepository _deviceSessionRepository;
         private readonly IDeviceSessionQuery _deviceSessionQuery;
-        //private readonly IHubContext<OrderingHub> _hubContext; // Injected Hub Context
-
+        private readonly IRealTimeNotifier _notifier;
         public SessionCommandService(
             ITableSessionRepository tableSessionRepository,
             IDeviceSessionRepository deviceSessionRepository,
             ITableRepository tableRepository,
             IDeviceSessionQuery deviceSessionQuery,
-            ITableSessionQuery tableSessionQuery)
-            //IHubContext<OrderingHub> hubContext)
+            ITableSessionQuery tableSessionQuery,
+            IRealTimeNotifier notifier)
         {
             _tableSessionRepository = tableSessionRepository;
             _deviceSessionRepository = deviceSessionRepository;
             _deviceSessionQuery = deviceSessionQuery;
             _tableSessionQuery = tableSessionQuery;
-            //_hubContext = hubContext;
+            _notifier = notifier;
         }
 
         public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request)
@@ -596,12 +757,7 @@ namespace OrderingSystem.Application.Services
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
 
             // Real-Time Notification: Send alert to all connected Cashiers/Admins
-            //await _hubContext.Clients.Group("Admins").SendAsync("ReceiveActivationRequest", new
-            //{
-            //    TableId = tableId,
-            //    TableSessionId = tableSession.TableSessionId,
-            //    Message = $"Table {tableId} is requesting activation."
-            //});
+            await _notifier.NotifyCashiersOfActivationAsync(tableId, tableSession.TableSessionId);
 
             return Result<SessionResponse>.Success(tableSession.ToResponse(deviceSession));
         }
@@ -619,12 +775,7 @@ namespace OrderingSystem.Application.Services
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
 
             // Real-Time Notification: Alert the specific Table Session Room (The Host)
-            // The Host's frontend will listen to their specific tableSessionId group string
-            //await _hubContext.Clients.Group(tableSession.TableSessionId.ToString()).SendAsync("ReceiveJoinRequest", new
-            //{
-            //    DeviceSessionId = deviceSessionId,
-            //    Message = "A new guest is requesting to join your table."
-            //});
+            await _notifier.NotifyHostOfGuestJoinAsync(tableSession.TableSessionId, deviceSessionId);
 
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(tableSession, deviceSession));
         }
@@ -650,10 +801,7 @@ namespace OrderingSystem.Application.Services
             await _deviceSessionRepository.UpdateDeviceSessionAsync(deviceSession);
 
             // Real-Time Notification: Notify the specific guest that they have been approved
-            //await _hubContext.Clients.Group(deviceSession.DeviceSessionId.ToString()).SendAsync("ReceiveApprovalNotification", new
-            //{
-            //    Message = "Your request to join the table has been approved."
-            //});
+            await _notifier.NotifyGuestOfApprovalAsync(deviceSession.DeviceSessionId);
 
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));
         }
@@ -661,6 +809,100 @@ namespace OrderingSystem.Application.Services
         public async Task<Result<SessionResponse>> DeactivateAsync(DeactivateSessionByAdminRequest request)
         {
             return Result<SessionResponse>.Failure("Not Implemented", enErrorType.Failure);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\TableCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Application.Services
+{
+    public class TableCommandService : ITableCommandService
+    {
+        private readonly ITableRepository _tableRepository;
+
+        public TableCommandService(ITableRepository tableRepository)
+        {
+            _tableRepository = tableRepository;
+        }
+
+        public async Task<Result<TableResponse>> AddTableAsync(AddTableRequest request)
+        {
+            // Business Rule: Check if table number on that floor already exists
+            if (await _tableRepository.ExistsAsync(request.TableNumber, request.Floor))
+            {
+                return Result<TableResponse>.Failure($"Table {request.TableNumber} already exists on Floor {request.Floor}.", enErrorType.Validation);
+            }
+
+            // Generate unique QR Code payload
+            string uniqueSegment = Guid.CreateVersion7().ToString()[..8];
+            string generatedQrCode = $"TBL-F{request.Floor}-N{request.TableNumber}-{uniqueSegment}".ToUpper();
+
+            var newTable = new Table
+            {
+                TableNumber = request.TableNumber,
+                Floor = request.Floor,
+                QrCode = generatedQrCode,
+                Status = enTableStatus.Available
+            };
+
+            await _tableRepository.AddTableAsync(newTable);
+
+            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.Floor, newTable.QrCode, newTable.Status);
+            
+            return Result<TableResponse>.Success(response);
+        }
+
+        public async Task<Result<TableResponse>> UpdateTableAsync(UpdateTableRequest request)
+        {
+            var table = await _tableRepository.GetTableByIdAsync(request.TableId);
+            if (table == null)
+            {
+                return Result<TableResponse>.Failure("Table not found.", enErrorType.NotFound);
+            }
+
+            // If changing floor/number, ensure no conflict
+            if ((table.TableNumber != request.TableNumber || table.Floor != request.Floor) &&
+                await _tableRepository.ExistsAsync(request.TableNumber, request.Floor))
+            {
+                return Result<TableResponse>.Failure("A table with this number already exists on this floor.", enErrorType.Validation);
+            }
+
+            table.TableNumber = request.TableNumber;
+            table.Floor = request.Floor;
+            table.Status = request.Status;
+
+            // Note: We deliberately do NOT update the QR code here, as the physical QR sticker on the table shouldn't break.
+
+            await _tableRepository.UpdateTableAsync(table);
+
+            var response = new TableResponse(table.TableId, table.TableNumber, table.Floor, table.QrCode, table.Status);
+            return Result<TableResponse>.Success(response);
+        }
+
+        public async Task<Result> DeleteTableAsync(int tableId)
+        {
+            var table = await _tableRepository.GetTableByIdAsync(tableId);
+            if (table == null)
+            {
+                return Result.Failure("Table not found.", enErrorType.NotFound);
+            }
+
+            // Optional Business Rule: Check if table has active sessions before deleting
+            if (table.Status != enTableStatus.Available)
+            {
+                return Result.Failure("Cannot delete a table that is currently occupied or billing.", enErrorType.Validation);
+            }
+
+            await _tableRepository.DeleteTableAsync(table);
+            return Result.Success();
         }
     }
 }
@@ -861,6 +1103,7 @@ namespace OrderingSystem.Domain.Entities
     {
         public int TableId { get; set; }
         public int TableNumber { get; set; }
+        public int Floor { get; set; }
         public string QrCode { get; set; } = string.Empty;
         public enTableStatus Status { get; set; }
 
@@ -1187,7 +1430,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastru
 ----------------------------------------
 ﻿using Microsoft.AspNetCore.SignalR;
 using OrderingSystem.Application.Interfaces.Notifications;
-using OrderingSystem.Infrastructure.Hubs;
+using OrderingSystem.Infrastructure.ExternalServices.Notifications;
 
 namespace OrderingSystem.Infrastructure.Notifications
 {
@@ -1236,7 +1479,7 @@ using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Domain.Enums;
 using System.Security.Claims;
 
-namespace OrderingSystem.Infrastructure.Hubs
+namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
 {
     public class TableSessionNotificationsHub : Hub<ITableSessionNotificationsHub>
     {
@@ -1284,6 +1527,35 @@ namespace OrderingSystem.Infrastructure.Hubs
 }
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\TableQuery.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Queries
+{
+    public class TableQuery : ITableQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableQuery(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task<string?> GetTableQrCodeAsync(int tableId)
+        {
+            return await _context.Tables
+                .AsNoTracking()
+                .Where(t => t.TableId == tableId)
+                .Select(t => t.QrCode)
+                .FirstOrDefaultAsync();
+        }
+    }
+}
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\TableSessionQuery.cs
 ----------------------------------------
 ﻿using Microsoft.EntityFrameworkCore;
@@ -1325,6 +1597,55 @@ namespace OrderingSystem.Infrastructure.Queries
                 .Where(s => s.TableId == tableId && s.Status == enSessionStatus.Active)
                 .Select(s => s.ToResponse())
                 .FirstOrDefaultAsync();
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\TableRepository.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Repositories
+{
+    public class TableRepository : ITableRepository
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableRepository(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task AddTableAsync(Table table)
+        {
+            _context.Tables.Add(table);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task UpdateTableAsync(Table table)
+        {
+            _context.Tables.Update(table);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task DeleteTableAsync(Table table)
+        {
+            _context.Tables.Remove(table);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task<bool> ExistsAsync(int tableNumber, int floor)
+        {
+            return await _context.Tables.AnyAsync(t => t.TableNumber == tableNumber && t.Floor == floor);
+        }
+
+        public async Task<Table?> GetTableByIdAsync(int tableId)
+        {
+            return await _context.Tables.FirstOrDefaultAsync(t => t.TableId == tableId);
         }
     }
 }

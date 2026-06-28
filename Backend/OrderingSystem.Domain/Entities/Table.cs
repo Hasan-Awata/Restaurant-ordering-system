@@ -9,6 +9,7 @@ namespace OrderingSystem.Domain.Entities
     {
         public int TableId { get; set; }
         public int TableNumber { get; set; }
+        public int Floor { get; set; }
         public string QrCode { get; set; } = string.Empty;
         public enTableStatus Status { get; set; }
 

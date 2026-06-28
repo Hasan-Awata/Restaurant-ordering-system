@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace OrderingSystem.Application.Interfaces.DeviceSessionInterfaces
+namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
 {
     public interface IDeviceSessionRepository
     {

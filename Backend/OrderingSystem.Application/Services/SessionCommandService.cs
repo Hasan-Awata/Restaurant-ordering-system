@@ -3,16 +3,16 @@ using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Domain.Common;
-using OrderingSystem.Application.Interfaces.DeviceSessionInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 //using Microsoft.AspNetCore.SignalR; 
 //using OrderingSystem.Application.Hubs;
 
 namespace OrderingSystem.Application.Services
 {
-    public class SessionCommandService : ISessionCommand
+    public class SessionCommandService : ISessionCommandService
     {
         private readonly ITableSessionRepository _tableSessionRepository;
         private readonly ITableSessionQuery _tableSessionQuery;
@@ -22,7 +22,6 @@ namespace OrderingSystem.Application.Services
         public SessionCommandService(
             ITableSessionRepository tableSessionRepository,
             IDeviceSessionRepository deviceSessionRepository,
-            ITableRepository tableRepository,
             IDeviceSessionQuery deviceSessionQuery,
             ITableSessionQuery tableSessionQuery,
             IRealTimeNotifier notifier)

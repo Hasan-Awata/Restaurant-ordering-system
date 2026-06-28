@@ -3,7 +3,7 @@ using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Domain.Enums;
 using System.Security.Claims;
 
-namespace OrderingSystem.Infrastructure.Hubs
+namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
 {
     public class TableSessionNotificationsHub : Hub<ITableSessionNotificationsHub>
     {

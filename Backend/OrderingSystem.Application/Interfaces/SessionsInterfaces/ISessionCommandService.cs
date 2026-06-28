@@ -6,7 +6,7 @@ using OrderingSystem.Domain.Common;
 
 namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 {
-    public interface ISessionCommand
+    public interface ISessionCommandService
     {
         public Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request);
         public Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request);
