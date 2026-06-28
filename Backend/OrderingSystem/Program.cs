@@ -66,7 +66,7 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 // ── Database Context ──────────────────────────────────────────────────────
-builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
+builder.Services.AddDbContextPool<OrderingSystemDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // ── Dependency Injections ──────────────────────────────────────────────────
@@ -112,11 +112,25 @@ builder.Services.AddAuthentication(options =>
 
 builder.Services.AddAuthorization();
 
-// ── Allowing all requests for testing ────────────────────────────────────────────────────
+// ── Adding CORS policy ────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll",
-        builder => builder.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+    // 1. Wide-open policy for local development only
+    options.AddPolicy("DevelopmentPolicy", builder =>
+        builder.SetIsOriginAllowed(_ => true)
+               .AllowAnyMethod()
+               .AllowAnyHeader()
+               .AllowCredentials());
+
+    // 2. Iron-clad policy for Production
+    options.AddPolicy("ProductionPolicy", builder =>
+        builder.WithOrigins(
+                    "https://www.your-restaurant-domain.com",
+                    "https://cashier.your-restaurant-domain.com"
+               )
+               .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
+               .AllowCredentials());
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -126,12 +140,19 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    // Use the wide-open policy locally
+    app.UseCors("DevelopmentPolicy");
+}
+else
+{
+    // Enforce HTTPS routing in production
+    app.UseHttpsRedirection();
+    // Use the locked-down policy in production
+    app.UseCors("ProductionPolicy");
 }
 
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 
-app.UseHttpsRedirection();
-app.UseCors("AllowAll"); // Delete on actual deployment
 app.UseAuthentication();
 app.UseAuthorization();
 

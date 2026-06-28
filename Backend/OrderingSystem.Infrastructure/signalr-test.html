@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SignalR Test Client</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+
+        h2 {
+            color: #333;
+        }
+
+        #log {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 15px;
+            height: 400px;
+            overflow-y: scroll;
+            font-family: Consolas, monospace;
+            border-radius: 5px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        .time {
+            color: #888;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Ordering System - Real-Time Logs</h2>
+    <p>Waiting for events from <strong>http://localhost:5148</strong>...</p>
+    <div id="log"></div>
+
+    <script>
+        function logMessage(message) {
+            const logDiv = document.getElementById("log");
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<div><span class="time">[${time}]</span> ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        // Pointing to your HTTP port (5148) to avoid HTTPS/SSL fetch errors locally
+        const connection = new signalR.HubConnectionBuilder()
+            .withUrl("http://localhost:5148/hubs/notifications/table-session")
+            .configureLogging(signalR.LogLevel.Information)
+            .build();
+
+        // Listeners
+        connection.on("ReceiveActivationRequest", (tableId, sessionId, message) => {
+            logMessage(`🔴 <strong>[CASHIERS]</strong> Activation Request: Table ${tableId} | Message: ${message}`);
+        });
+
+        connection.on("ReceiveJoinRequest", (deviceId, message) => {
+            logMessage(`🔵 <strong>[HOST]</strong> Guest Join Request: Device ${deviceId} | Message: ${message}`);
+        });
+
+        connection.on("ReceiveApprovalNotification", (message) => {
+            logMessage(`🟢 <strong>[GUEST]</strong> Approval: ${message}`);
+        });
+
+        // Start connection
+        async function start() {
+            try {
+                await connection.start();
+                logMessage("✅ Connected to SignalR Hub successfully!");
+            } catch (err) {
+                logMessage(`❌ Connection Failed: ${err.message}`);
+                setTimeout(start, 5000); // Try again in 5 seconds
+            }
+        }
+
+        start();
+    </script>
+</body>
+</html>

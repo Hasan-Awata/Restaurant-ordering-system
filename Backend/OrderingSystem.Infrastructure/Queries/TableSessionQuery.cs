@@ -33,10 +33,15 @@ namespace OrderingSystem.Infrastructure.Queries
             // Bypasses entity tracking and maps directly from SQL to your DTO.
             // This eliminates the need for your SessionsMappers.cs on the read path entirely.
             return await _context.TableSessions
-                .AsNoTracking()
-                .Where(s => s.TableId == tableId && s.Status == enSessionStatus.Active)
-                .Select(s => s.ToResponse())
-                .FirstOrDefaultAsync();
+                    .AsNoTracking()
+                    .Where(s => s.TableId == tableId && s.Status == enSessionStatus.Active)
+                    .Select(s => new TableSessionResponse(
+                        s.TableSessionId,
+                        s.Table.TableNumber,
+                        s.Status,
+                        s.CreatedAt
+                    ))
+                    .FirstOrDefaultAsync();
         }
     }
 }
