@@ -7,6 +7,7 @@ namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
 {
     public interface IDeviceSessionRepository
     {
+        public Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId);
         public Task AddSessionAsync(DeviceSession session);
         public Task UpdateDeviceSessionAsync(DeviceSession session);
     }

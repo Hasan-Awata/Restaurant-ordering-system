@@ -23,8 +23,8 @@ namespace OrderingSystem.Infrastructure.Queries
             // Fetches the domain entity for business rule validation in the Command service.
             // Includes the Session navigation property so you can check table.Session != null.
             return await _context.Tables
-                .Include(t => t.Session)
-                .FirstOrDefaultAsync(t => t.QrCode == qrCode);
+                    .Include(t => t.Sessions.Where(s => s.Status != enSessionStatus.Closed))
+                    .FirstOrDefaultAsync(t => t.QrCode == qrCode);
         }
 
         // ── Pure Read-Side Query (CQRS) ──────────────────────────────────────────

@@ -13,6 +13,12 @@ namespace OrderingSystem.Infrastructure.Repositories
             _context = context;
         }
 
+        // Reading Path
+        public async Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId)
+        {
+            return await _context.SessionDevices.FindAsync(deviceSessionId);
+        }
+
         public async Task AddSessionAsync(DeviceSession session)
         {
             _context.SessionDevices.Add(session);

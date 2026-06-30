@@ -14,6 +14,6 @@ namespace OrderingSystem.Domain.Entities
         public enTableStatus Status { get; set; }
 
         // Navigation
-        public TableSession Session { get; set; } = null!;
+        public ICollection<TableSession> Sessions { get; set; } = new List<TableSession>();
     }
 }

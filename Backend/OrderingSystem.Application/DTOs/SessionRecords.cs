@@ -7,7 +7,7 @@ using System.Text;
 namespace OrderingSystem.Application.DTOs
 {
     // Command Payloads
-    public record ProcessQrCodeRequest(string qrCode, Guid? deviceSessionId = null);
+    public record ProcessQrCodeRequest(string qrCode);
     public record ApproveJoiningSessionRequest(Guid deviceSessionId);
     public record DeactivateSessionByAdminRequest(int TableId);
 

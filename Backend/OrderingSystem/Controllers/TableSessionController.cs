@@ -24,8 +24,37 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost("qr")]
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
-            var response = await _sessionCommandService.ProcessTableQrCodeAsync(request);
-            return Ok(response);
+            // 1. Extract the secure cookie (if it exists)
+            Guid? secureDeviceId = null;
+            if (Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) &&
+                Guid.TryParse(cookieValue, out var parsedId))
+            {
+                secureDeviceId = parsedId;
+            }
+
+            // 2. Pass the clean DTO and the secure cookie value as separate parameters
+            var response = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, secureDeviceId);
+
+            // 3. If successful, set/refresh the secure cookie
+            if (response.IsSuccess && response.Value?.DeviceSession != null)
+            {
+                var cookieOptions = new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = true,
+                    SameSite = SameSiteMode.None,
+                    Expires = DateTime.UtcNow.AddHours(4)
+                };
+
+                Response.Cookies.Append(
+                    "DeviceSessionId",
+                    response.Value.DeviceSession.DeviceSessionId.ToString(),
+                    cookieOptions
+                );
+            }
+
+            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
+            return Ok(response.Value);
         }
 
         // 2. READ ENDPOINT (Query Path)
