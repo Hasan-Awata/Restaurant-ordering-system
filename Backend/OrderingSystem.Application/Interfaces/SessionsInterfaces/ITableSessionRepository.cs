@@ -7,6 +7,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 {
     public interface ITableSessionRepository
     {
+        public Task<Table?> GetTableWithActiveSessionAsync(string qrCode);
         public Task AddSessionAsync(TableSession session);
     }
 }

@@ -21,6 +21,15 @@ namespace OrderingSystem.Infrastructure.Repositories
             _context = context;
         }
 
+        public async Task<Table?> GetTableWithActiveSessionAsync(string qrCode)
+        {
+            // Fetches the domain entity for business rule validation in the Command service.
+            // Includes the Session navigation property so you can check table.Session != null.
+            return await _context.Tables
+                    .Include(t => t.Sessions.Where(s => s.Status != enSessionStatus.Closed))
+                    .ThenInclude(s => s.Devices)
+                    .FirstOrDefaultAsync(t => t.QrCode == qrCode);
+        }
 
         public async Task AddSessionAsync(TableSession session)
         {

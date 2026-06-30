@@ -8,8 +8,6 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 {
     public interface ITableSessionQuery
     {
-        public Task<Table?> GetTableWithActiveSessionAsync(string qrCode);
-
         public Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId);
     }
 }

@@ -13,10 +13,9 @@ namespace OrderingSystem.Application.Services
     public class SessionCommandService : ISessionCommandService
     {
         private readonly ITableSessionRepository _tableSessionRepository;
-        private readonly ITableSessionQuery _tableSessionQuery;
         private readonly IDeviceSessionRepository _deviceSessionRepository;
-        private readonly IDeviceSessionQuery _deviceSessionQuery;
         private readonly IRealTimeNotifier _notifier;
+
         public SessionCommandService(
             ITableSessionRepository tableSessionRepository,
             IDeviceSessionRepository deviceSessionRepository,
@@ -26,22 +25,23 @@ namespace OrderingSystem.Application.Services
         {
             _tableSessionRepository = tableSessionRepository;
             _deviceSessionRepository = deviceSessionRepository;
-            _deviceSessionQuery = deviceSessionQuery;
-            _tableSessionQuery = tableSessionQuery;
             _notifier = notifier;
         }
 
         public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(string qrCode, Guid? deviceSessionId = null)
         {
-            var table = await _tableSessionQuery.GetTableWithActiveSessionAsync(qrCode);
+            // PRO-TIP: Ensure this query in TableSessionQuery.cs now uses:
+            // .Include(t => t.Sessions.Where(s => s.Status != enSessionStatus.Closed))
+            // .ThenInclude(s => s.Devices) <--- Add this so we have devices in memory!
+            var table = await _tableSessionRepository.GetTableWithActiveSessionAsync(qrCode);
 
             if (table == null)
             {
                 return Result<SessionResponse>.Failure("Table was not found.", enErrorType.NotFound);
             }
+
             var activeSession = table.Sessions.FirstOrDefault();
 
-            // A live table session is running
             if (activeSession != null)
             {
                 if (activeSession.Status == enSessionStatus.PendingActivation)
@@ -49,18 +49,15 @@ namespace OrderingSystem.Application.Services
                     return Result<SessionResponse>.Failure("Table session is pending activation.", enErrorType.Conflict);
                 }
 
-                // If they have an ID, they are reconnecting/accessing
                 if (deviceSessionId.HasValue)
                 {
-                    return await AccessTableSessionAsync(activeSession.TableSessionId, deviceSessionId.Value);
+                    return AccessTableSessionAsync(activeSession, deviceSessionId.Value);
                 }
 
-                // If they don't have an ID, they are a new guest joining the existing session
                 Guid newGuestDeviceId = Guid.CreateVersion7();
                 return await JoinTableSessionAsync(activeSession, newGuestDeviceId);
             }
 
-            // No active session -> Brand new activation request by a Host
             Guid newHostDeviceId = Guid.CreateVersion7();
             return await ActivateTableSessionAsync(table.TableId, newHostDeviceId);
         }
@@ -81,14 +78,14 @@ namespace OrderingSystem.Application.Services
                 DeviceSessionId = deviceSessionId,
                 TableSessionId = tableSession.TableSessionId,
                 Role = enDeviceRole.Host,
-                IsApproved = true, // The Host is auto-approved by default, waiting on cashier
+                IsApproved = true,
                 TableSession = tableSession,
             };
 
-            await _tableSessionRepository.AddSessionAsync(tableSession);
+            // Optimization: EF Core Graph Insertion. 
+            // Saving the DeviceSession automatically saves the attached TableSession! (1 Round Trip)
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
 
-            // Real-Time Notification: Send alert to all connected Cashiers/Admins
             await _notifier.NotifyCashiersOfActivationAsync(tableId, tableSession.TableSessionId);
 
             return Result<SessionResponse>.Success(tableSession.ToResponse(deviceSession));
@@ -100,41 +97,34 @@ namespace OrderingSystem.Application.Services
             {
                 DeviceSessionId = deviceSessionId,
                 TableSessionId = tableSession.TableSessionId,
-                Role = enDeviceRole.Guest, 
-                IsApproved = false,        
+                Role = enDeviceRole.Guest,
+                IsApproved = false,
             };
 
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
 
-            // Real-Time Notification: Alert the specific Table Session Room (The Host)
             await _notifier.NotifyHostOfGuestJoinAsync(tableSession.TableSessionId, deviceSessionId);
 
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(tableSession, deviceSession));
         }
 
-        private async Task<Result<SessionResponse>> AccessTableSessionAsync(Guid tableSessionId, Guid deviceSessionId)
+        // Changed from 'async Task' to synchronous 'Result' because we no longer query the DB here!
+        private Result<SessionResponse> AccessTableSessionAsync(TableSession activeSession, Guid deviceSessionId)
         {
-            // Implementation Note: Fetch the device from DB. 
-            // If it exists and matches tableSessionId, map to success response to restore UI state.
-            // If it doesn't match, return an unauthorized/hack attempt failure.
-            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(deviceSessionId);
-            
+            // Search for the device in the list we already loaded into memory
+            var deviceSession = activeSession.Devices.FirstOrDefault(d => d.DeviceSessionId == deviceSessionId);
+
             if (deviceSession == null)
             {
-                return Result<SessionResponse>.Failure("Invalid or expired device session", enErrorType.Validation);
+                return Result<SessionResponse>.Failure("Invalid or expired device session", enErrorType.Unauthorized);
             }
 
-            if (deviceSession.TableSessionId != tableSessionId)
-            {
-                return Result<SessionResponse>.Failure("Device session does not match the table session", enErrorType.Unauthorized);
-            }
-
-            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));
+            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(activeSession, deviceSession));
         }
 
         public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request)
         {
-            var deviceSession = await _deviceSessionQuery.GetDeviceSessionByIdAsync(request.deviceSessionId);
+            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.deviceSessionId);
 
             if (deviceSession == null)
             {
@@ -144,7 +134,6 @@ namespace OrderingSystem.Application.Services
             deviceSession.IsApproved = true;
             await _deviceSessionRepository.UpdateDeviceSessionAsync(deviceSession);
 
-            // Real-Time Notification: Notify the specific guest that they have been approved
             await _notifier.NotifyGuestOfApprovalAsync(deviceSession.DeviceSessionId);
 
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));

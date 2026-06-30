@@ -43,8 +43,8 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.HasKey(e => e.TableSessionId);
 
                 entity.HasOne(e => e.Table)
-                      .WithOne(t => t.Sessions)
-                      .HasForeignKey<TableSession>(e => e.TableId)
+                      .WithMany(t => t.Sessions)
+                      .HasForeignKey(e => e.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
             });
 

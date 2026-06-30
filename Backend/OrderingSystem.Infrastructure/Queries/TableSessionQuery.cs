@@ -17,17 +17,6 @@ namespace OrderingSystem.Infrastructure.Queries
             _context = context;
         }
 
-        // ── Command-Side Hydration Query ─────────────────────────────────────────
-        public async Task<Table?> GetTableWithActiveSessionAsync(string qrCode)
-        {
-            // Fetches the domain entity for business rule validation in the Command service.
-            // Includes the Session navigation property so you can check table.Session != null.
-            return await _context.Tables
-                    .Include(t => t.Sessions.Where(s => s.Status != enSessionStatus.Closed))
-                    .FirstOrDefaultAsync(t => t.QrCode == qrCode);
-        }
-
-        // ── Pure Read-Side Query (CQRS) ──────────────────────────────────────────
         public async Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId)
         {
             // Bypasses entity tracking and maps directly from SQL to your DTO.
