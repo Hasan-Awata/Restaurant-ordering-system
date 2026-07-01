@@ -63,7 +63,7 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.Price).HasPrecision(18, 2);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
-
+             
                 entity.HasOne(e => e.Category)
                       .WithMany(c => c.MenuItems)
                       .HasForeignKey(e => e.CategoryId)
