@@ -125,8 +125,7 @@ builder.Services.AddCors(options =>
     // 2. Iron-clad policy for Production
     options.AddPolicy("ProductionPolicy", builder =>
         builder.WithOrigins(
-                    "https://www.your-restaurant-domain.com",
-                    "https://cashier.your-restaurant-domain.com"
+                "http://127.0.0.1:5500"  // VS Code Live Server (if using basic HTML)
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
