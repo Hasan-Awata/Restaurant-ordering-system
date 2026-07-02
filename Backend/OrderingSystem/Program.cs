@@ -66,8 +66,9 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 // ── Database Context ──────────────────────────────────────────────────────
-builder.Services.AddDbContextPool<OrderingSystemDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
+        b => b.MigrationsAssembly(typeof(OrderingSystemDbContext).Assembly.FullName)));
 
 // ── Dependency Injections ──────────────────────────────────────────────────
 builder.Services.AddSignalR();
