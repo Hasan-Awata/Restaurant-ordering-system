@@ -12,7 +12,7 @@ using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 
 namespace OrderingSystem.Infrastructure.Repositories
 {
-    public class TableSessionRepository : ITableSessionRepository, ITableSessionQuery
+    public class TableSessionRepository : ITableSessionRepository
     {
         private readonly OrderingSystemDbContext _context;
 
@@ -21,32 +21,20 @@ namespace OrderingSystem.Infrastructure.Repositories
             _context = context;
         }
 
-        // ==========================================
-        // WRITE PATH (ITableSessionRepository)
-        // ==========================================
-        public async Task<Table?> GetTableWithActiveSessionAsync(int tableId)
+        public async Task<Table?> GetTableWithActiveSessionAsync(string qrCode)
         {
-            // Tracks entity state for changes
-            return await _context.Tables.FirstOrDefaultAsync(t => t.TableId == tableId);
+            // Fetches the domain entity for business rule validation in the Command service.
+            // Includes the Session navigation property so you can check table.Session != null.
+            return await _context.Tables
+                    .Include(t => t.Sessions.Where(s => s.Status != enSessionStatus.Closed))
+                    .ThenInclude(s => s.Devices)
+                    .FirstOrDefaultAsync(t => t.QrCode == qrCode);
         }
 
-        public async Task SaveSessionAsync(TableSession session)
+        public async Task AddSessionAsync(TableSession session)
         {
             _context.TableSessions.Add(session);
             await _context.SaveChangesAsync();
-        }
-
-        // ==========================================
-        // READ PATH (ITableSessionQueryService)
-        // ==========================================
-        public async Task<SessionResponse?> GetActiveSessionByTableAsync(int tableId)
-        {
-            var entity = await _context.TableSessions
-                .Include(s => s.Table)
-                .AsNoTracking() // Read optimization
-                .FirstOrDefaultAsync(s => s.TableId == tableId && s.Status == enSessionStatus.Active);
-
-            return entity?.ToResponse();
         }
     }
 }

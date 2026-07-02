@@ -1,0 +1,2736 @@
+PROJECT ARCHITECTURE SNAPSHOT
+=============================
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\appsettings.Development.json
+----------------------------------------
+{
+  "ConnectionStrings": {
+    "DefaultConnection": ""
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "JwtSettings": {
+    "SecretKey": "this_is_my_dummy_secret",
+    "Issuer": "https://localhost:5148",
+    "Audience": "https://localhost:5148"
+  }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\appsettings.json
+----------------------------------------
+{
+  "ConnectionStrings": {
+    "DefaultConnection": ""
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "JwtSettings": {
+    "SecretKey": "this_is_my_dummy_secret",
+    "Issuer": "https://localhost:5148",
+    "Audience": "https://localhost:5148"
+  }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\OrderingSystem.csproj
+----------------------------------------
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>a8c5afdc-ba43-4717-815b-8c5c48f07ab6</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OrderingSystem.Application\OrderingSystem.Application.csproj" />
+    <ProjectReference Include="..\OrderingSystem.Domain\OrderingSystem.Domain.csproj" />
+    <ProjectReference Include="..\OrderingSystem.Infrastructure\OrderingSystem.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Program.cs
+----------------------------------------
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Services;
+using OrderingSystem.Infrastructure.Data;
+using OrderingSystem.Infrastructure.ExternalServices.Notifications;
+using OrderingSystem.Infrastructure.Notifications;
+using OrderingSystem.Infrastructure.Queries;
+using OrderingSystem.Infrastructure.Repositories;
+using System.Text;
+using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// ── Caching ──────────────────────────────────────────────────────────────
+builder.Services.AddMemoryCache(); 
+
+// ── Controllers & JSON ───────────────────────────────────────────────────
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+
+// ── Rate Limiting ────────────────────────────────────────────────────────
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("Fixed", limiterOptions =>
+    {
+        limiterOptions.PermitLimit = 100;
+        limiterOptions.Window = TimeSpan.FromMinutes(1);
+        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        limiterOptions.QueueLimit = 2; 
+    });
+
+    options.OnRejected = async (context, token) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsync("Too many requests. Please try again later.", cancellationToken: token);
+    };
+});
+
+// ── Swagger with JWT Bearer ───────────────────────────────────────────────
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Description = "Enter your JWT token.",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
+
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("Bearer", document)] = []
+    });
+});
+
+// ── Database Context ──────────────────────────────────────────────────────
+builder.Services.AddDbContextPool<OrderingSystemDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// ── Dependency Injections ──────────────────────────────────────────────────
+builder.Services.AddSignalR();
+builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
+
+builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
+
+builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
+builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
+
+builder.Services.AddScoped<IDeviceSessionRepository, DeviceSessionRepository>();
+builder.Services.AddScoped<IDeviceSessionQuery, DeviceSessionQuery>();
+
+builder.Services.AddScoped<ITableRepository, TableRepository>();
+builder.Services.AddScoped<ITableCommandService, TableCommandService>();
+builder.Services.AddScoped<ITableQuery, TableQuery>();
+
+
+// ── JWT Authentication ────────────────────────────────────────────────────
+var jwtSettings = builder.Configuration.GetSection("JwtSettings");
+var secretKey = jwtSettings["SecretKey"]!;
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtSettings["Issuer"],
+        ValidAudience = jwtSettings["Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(
+        Encoding.UTF8.GetBytes(secretKey))
+    };
+});
+
+builder.Services.AddAuthorization();
+
+// ── Allowing all requests for testing ────────────────────────────────────────────────────
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll",
+        builder => builder.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+//app.UseHttpsRedirection();
+app.UseCors("AllowAll"); // Delete on actual deployment
+
+app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers().RequireRateLimiting("Fixed");
+
+app.Run();
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TableController.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Mvc;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/tables")]
+    public class TablesController : ControllerBase
+    {
+        private readonly ITableCommandService _tableCommandService;
+        private readonly ITableQuery _tableQueryService;
+
+        public TablesController(ITableCommandService tableCommandService, ITableQuery tableQueryService)
+        {
+            _tableCommandService = tableCommandService;
+            _tableQueryService = tableQueryService;
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> AddTable([FromBody] AddTableRequest request)
+        {
+            var result = await _tableCommandService.AddTableAsync(request);
+            if (!result.IsSuccess)
+            {
+                return result.ErrorType == enErrorType.Validation ? BadRequest(result.ErrorMessage) : StatusCode(500, result.ErrorMessage);
+            }
+            return CreatedAtAction(nameof(GetQrCode), new { tableId = result.Value!.TableId }, result.Value);
+        }
+
+        [HttpPut]
+        public async Task<IActionResult> UpdateTable([FromBody] UpdateTableRequest request)
+        {
+            var result = await _tableCommandService.UpdateTableAsync(request);
+            if (!result.IsSuccess)
+            {
+                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
+                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
+                return StatusCode(500, result.ErrorMessage);
+            }
+            return Ok(result.Value);
+        }
+
+        [HttpDelete("{tableId}")]
+        public async Task<IActionResult> DeleteTable(int tableId)
+        {
+            var result = await _tableCommandService.DeleteTableAsync(tableId);
+            if (!result.IsSuccess)
+            {
+                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
+                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
+                return StatusCode(500, result.ErrorMessage);
+            }
+            return NoContent();
+        }
+
+        [HttpGet("{tableId}/qrcode")]
+        public async Task<IActionResult> GetQrCode(int tableId)
+        {
+            var qrCode = await _tableQueryService.GetTableQrCodeAsync(tableId);
+            if (qrCode == null) return NotFound($"Table ID {tableId} not found.");
+
+            return Ok(new { QrCode = qrCode });
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TableSessionController.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Mvc;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.DTOs;
+
+namespace OrderingSystem.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/tables/sessions")]
+    public class TableSessionsController : ControllerBase
+    {
+        private readonly ISessionCommandService _sessionCommandService;
+        private readonly ITableSessionQuery _sessionQueryService;
+
+        // Explicit dependency routing
+        public TableSessionsController(
+            ISessionCommandService sessionCommandService,
+            ITableSessionQuery sessionQueryService)
+        {
+            _sessionCommandService = sessionCommandService;
+            _sessionQueryService = sessionQueryService;
+        }
+
+        // 1. WRITE ENDPOINT (Command Path)
+        [HttpPost("qr")]
+        public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
+        {
+            var response = await _sessionCommandService.ProcessTableQrCodeAsync(request);
+            return Ok(response);
+        }
+
+        // 2. READ ENDPOINT (Query Path)
+        [HttpGet("active/{tableId}")]
+        public async Task<IActionResult> GetActiveSession(int tableId)
+        {
+            var response = await _sessionQueryService.GetActiveSessionByTableAsync(tableId);
+            if (response == null) return NotFound($"No active session found for table ID {tableId}.");
+
+            return Ok(response);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Properties\launchSettings.json
+----------------------------------------
+﻿{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "launchUrl": "swagger",
+      "applicationUrl": "http://localhost:5148",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    "https": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "launchUrl": "swagger",
+      "applicationUrl": "https://localhost:7070;http://localhost:5148",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\OrderingSystem.Application.csproj
+----------------------------------------
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OrderingSystem.Domain\OrderingSystem.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\SessionRecords.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.DTOs
+{
+    // Command Payloads
+    public record ProcessQrCodeRequest(string qrCode, Guid? deviceSessionId = null);
+    public record ApproveJoiningSessionRequest(Guid deviceSessionId);
+    public record DeactivateSessionByAdminRequest(int TableId);
+
+
+    // Query/Command Response Payloads
+    public record DeviceSessionResponse(Guid DeviceSessionId, enDeviceRole DeviceRole, bool IsApproved);
+    public record TableSessionResponse(Guid TableSessionId, int TableNumber, enSessionStatus Status, DateTime CreatedAt);
+    public record SessionResponse(TableSessionResponse TableSession, DeviceSessionResponse? DeviceSession);
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\TableRecords.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Enums;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.DTOs
+{
+    // Command Payloads
+    public record AddTableRequest(int TableNumber, int Floor);
+    public record UpdateTableRequest(int TableId, int TableNumber, int Floor, enTableStatus Status);
+
+    // Query/Command Response Payloads
+    public record TableResponse(int TableId, int TableNumber, int Floor, string QrCode, enTableStatus Status);
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\Notifications\IRealTimeNotifier.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.Notifications
+{
+    public interface IRealTimeNotifier
+    {
+        public Task NotifyCashiersOfActivationAsync(int tableId, Guid tableSessionId);
+        public Task NotifyHostOfGuestJoinAsync(Guid tableSessionId, Guid guestDeviceSessionId);
+        public Task NotifyGuestOfApprovalAsync(Guid guestDeviceSessionId);
+        public Task NotifyWaitersOfNewOrderAsync(int tableId, int orderId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\Notifications\ITableSessionNotificationsHub.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.Notifications
+{
+    public interface ITableSessionNotificationsHub
+    {
+        public Task ReceiveActivationRequest(int tableId, Guid tableSessionId, string message);
+        public Task ReceiveJoinRequest(Guid deviceSessionId, string message);
+        public Task ReceiveApprovalNotification(string message);
+
+        // Add future notifications here (e.g., ReceiveNewOrder, ReceivePaymentAlert)
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\IDeviceSessionCommand.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Common;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
+{
+    public interface IDeviceSessionCommand
+    {
+        Task<Result<TableSessionResponse>> DeactivateAsync(DeactivateSessionByAdminRequest request);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\IDeviceSessionQuery.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Entities;
+
+namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
+{
+    public interface IDeviceSessionQuery
+    {
+        public Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\IDeviceSessionRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
+{
+    public interface IDeviceSessionRepository
+    {
+        public Task AddSessionAsync(DeviceSession session);
+        public Task UpdateDeviceSessionAsync(DeviceSession session);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\ISessionCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Common;
+
+namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
+{
+    public interface ISessionCommandService
+    {
+        public Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request);
+        public Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\ITableSessionQuery.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
+{
+    public interface ITableSessionQuery
+    {
+        public Task<Table?> GetTableWithActiveSessionAsync(string qrCode);
+
+        public Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\ITableSessionRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
+{
+    public interface ITableSessionRepository
+    {
+        public Task AddSessionAsync(TableSession session);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableInterfaces\ITableCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Common;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableInterfaces
+{
+    public interface ITableCommandService
+    {
+        Task<Result<TableResponse>> AddTableAsync(AddTableRequest request);
+        Task<Result<TableResponse>> UpdateTableAsync(UpdateTableRequest request);
+        Task<Result> DeleteTableAsync(int tableId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableInterfaces\ITableQuery.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableInterfaces
+{
+    public interface ITableQuery
+    {
+        public Task<string?> GetTableQrCodeAsync(int tableId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TableInterfaces\ITableRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TableInterfaces
+{
+    public interface ITableRepository
+    {
+        Task AddTableAsync(Table table);
+        Task UpdateTableAsync(Table table);
+        Task DeleteTableAsync(Table table);
+        Task<bool> ExistsAsync(int tableNumber, int floor);
+
+        // Reading methods (for business logic)
+        public Task<Table?> GetTableByIdAsync(int tableId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Mappers\SessionsMappers.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using System;
+
+namespace OrderingSystem.Application.Mappers
+{
+    public static class SessionsMappers
+    {
+        public static TableSessionResponse ToResponse(this TableSession entity)
+        {
+            return new TableSessionResponse(
+                entity.TableSessionId,
+                entity.Table?.TableNumber ?? 0,
+                entity.Status,
+                entity.CreatedAt
+            );
+        }
+
+        public static DeviceSessionResponse ToResponse(this DeviceSession entity)
+        {
+            return new DeviceSessionResponse(
+                entity.DeviceSessionId,  
+                entity.Role,
+                entity.IsApproved
+            );
+        }
+
+        public static SessionResponse ToResponse(this TableSession table, DeviceSession? device = null)
+        {
+            return new SessionResponse(table.ToResponse(), device?.ToResponse());
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\SessionCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Mappers;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+//using Microsoft.AspNetCore.SignalR; 
+//using OrderingSystem.Application.Hubs;
+
+namespace OrderingSystem.Application.Services
+{
+    public class SessionCommandService : ISessionCommandService
+    {
+        private readonly ITableSessionRepository _tableSessionRepository;
+        private readonly ITableSessionQuery _tableSessionQuery;
+        private readonly IDeviceSessionRepository _deviceSessionRepository;
+        private readonly IDeviceSessionQuery _deviceSessionQuery;
+        private readonly IRealTimeNotifier _notifier;
+        public SessionCommandService(
+            ITableSessionRepository tableSessionRepository,
+            IDeviceSessionRepository deviceSessionRepository,
+            IDeviceSessionQuery deviceSessionQuery,
+            ITableSessionQuery tableSessionQuery,
+            IRealTimeNotifier notifier)
+        {
+            _tableSessionRepository = tableSessionRepository;
+            _deviceSessionRepository = deviceSessionRepository;
+            _deviceSessionQuery = deviceSessionQuery;
+            _tableSessionQuery = tableSessionQuery;
+            _notifier = notifier;
+        }
+
+        public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(ProcessQrCodeRequest request)
+        {
+            var table = await _tableSessionQuery.GetTableWithActiveSessionAsync(request.qrCode);
+
+            if (table == null)
+            {
+                return Result<SessionResponse>.Failure("Table was not found.", enErrorType.NotFound);
+            }
+
+            // A live table session is running
+            if (table.Session != null)
+            {
+                // Corrected Logic: If they have an ID, they are reconnecting/accessing
+                if (request.deviceSessionId.HasValue)
+                {
+                    return await AccessTableSessionAsync(table.Session.TableSessionId, request.deviceSessionId.Value);
+                }
+
+                // If they don't have an ID, they are a new guest joining the existing session
+                Guid newGuestDeviceId = Guid.CreateVersion7();
+                return await JoinTableSessionAsync(table.Session, newGuestDeviceId);
+            }
+
+            // No active session -> Brand new activation request by a Host
+            Guid newHostDeviceId = Guid.CreateVersion7();
+            return await ActivateTableSessionAsync(table.TableId, newHostDeviceId);
+        }
+
+        private async Task<Result<SessionResponse>> ActivateTableSessionAsync(int tableId, Guid deviceSessionId)
+        {
+            var tableSession = new TableSession
+            {
+                TableSessionId = Guid.CreateVersion7(),
+                TableId = tableId,
+                CreatedAt = DateTime.UtcNow,
+                Status = enSessionStatus.PendingActivation,
+                ClosedAt = null,
+            };
+
+            var deviceSession = new DeviceSession
+            {
+                DeviceSessionId = deviceSessionId,
+                TableSessionId = tableSession.TableSessionId,
+                Role = enDeviceRole.Host,
+                IsApproved = true, // The Host is auto-approved by default, waiting on cashier
+                TableSession = tableSession,
+            };
+
+            await _tableSessionRepository.AddSessionAsync(tableSession);
+            await _deviceSessionRepository.AddSessionAsync(deviceSession);
+
+            // Real-Time Notification: Send alert to all connected Cashiers/Admins
+            await _notifier.NotifyCashiersOfActivationAsync(tableId, tableSession.TableSessionId);
+
+            return Result<SessionResponse>.Success(tableSession.ToResponse(deviceSession));
+        }
+
+        private async Task<Result<SessionResponse>> JoinTableSessionAsync(TableSession tableSession, Guid deviceSessionId)
+        {
+            var deviceSession = new DeviceSession
+            {
+                DeviceSessionId = deviceSessionId,
+                TableSessionId = tableSession.TableSessionId,
+                Role = enDeviceRole.Guest, 
+                IsApproved = false,        
+            };
+
+            await _deviceSessionRepository.AddSessionAsync(deviceSession);
+
+            // Real-Time Notification: Alert the specific Table Session Room (The Host)
+            await _notifier.NotifyHostOfGuestJoinAsync(tableSession.TableSessionId, deviceSessionId);
+
+            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(tableSession, deviceSession));
+        }
+
+        private async Task<Result<SessionResponse>> AccessTableSessionAsync(Guid tableSessionId, Guid deviceSessionId)
+        {
+            // Implementation Note: Fetch the device from DB. 
+            // If it exists and matches tableSessionId, map to success response to restore UI state.
+            // If it doesn't match, return an unauthorized/hack attempt failure.
+            return Result<SessionResponse>.Failure("Not Implemented", enErrorType.Failure);
+        }
+
+        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request)
+        {
+            var deviceSession = await _deviceSessionQuery.GetDeviceSessionByIdAsync(request.deviceSessionId);
+
+            if (deviceSession == null)
+            {
+                return Result<SessionResponse>.Failure("Device session not found.", enErrorType.NotFound);
+            }
+
+            deviceSession.IsApproved = true;
+            await _deviceSessionRepository.UpdateDeviceSessionAsync(deviceSession);
+
+            // Real-Time Notification: Notify the specific guest that they have been approved
+            await _notifier.NotifyGuestOfApprovalAsync(deviceSession.DeviceSessionId);
+
+            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));
+        }
+
+        public async Task<Result<SessionResponse>> DeactivateAsync(DeactivateSessionByAdminRequest request)
+        {
+            return Result<SessionResponse>.Failure("Not Implemented", enErrorType.Failure);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\TableCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Application.Services
+{
+    public class TableCommandService : ITableCommandService
+    {
+        private readonly ITableRepository _tableRepository;
+
+        public TableCommandService(ITableRepository tableRepository)
+        {
+            _tableRepository = tableRepository;
+        }
+
+        public async Task<Result<TableResponse>> AddTableAsync(AddTableRequest request)
+        {
+            // Business Rule: Check if table number on that floor already exists
+            if (await _tableRepository.ExistsAsync(request.TableNumber, request.Floor))
+            {
+                return Result<TableResponse>.Failure($"Table {request.TableNumber} already exists on Floor {request.Floor}.", enErrorType.Validation);
+            }
+
+            // Generate unique QR Code payload
+            string uniqueSegment = Guid.CreateVersion7().ToString()[..8];
+            string generatedQrCode = $"TBL-F{request.Floor}-N{request.TableNumber}-{uniqueSegment}".ToUpper();
+
+            var newTable = new Table
+            {
+                TableNumber = request.TableNumber,
+                Floor = request.Floor,
+                QrCode = generatedQrCode,
+                Status = enTableStatus.Available
+            };
+
+            await _tableRepository.AddTableAsync(newTable);
+
+            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.Floor, newTable.QrCode, newTable.Status);
+            
+            return Result<TableResponse>.Success(response);
+        }
+
+        public async Task<Result<TableResponse>> UpdateTableAsync(UpdateTableRequest request)
+        {
+            var table = await _tableRepository.GetTableByIdAsync(request.TableId);
+            if (table == null)
+            {
+                return Result<TableResponse>.Failure("Table not found.", enErrorType.NotFound);
+            }
+
+            // If changing floor/number, ensure no conflict
+            if ((table.TableNumber != request.TableNumber || table.Floor != request.Floor) &&
+                await _tableRepository.ExistsAsync(request.TableNumber, request.Floor))
+            {
+                return Result<TableResponse>.Failure("A table with this number already exists on this floor.", enErrorType.Validation);
+            }
+
+            table.TableNumber = request.TableNumber;
+            table.Floor = request.Floor;
+            table.Status = request.Status;
+
+            // Note: We deliberately do NOT update the QR code here, as the physical QR sticker on the table shouldn't break.
+
+            await _tableRepository.UpdateTableAsync(table);
+
+            var response = new TableResponse(table.TableId, table.TableNumber, table.Floor, table.QrCode, table.Status);
+            return Result<TableResponse>.Success(response);
+        }
+
+        public async Task<Result> DeleteTableAsync(int tableId)
+        {
+            var table = await _tableRepository.GetTableByIdAsync(tableId);
+            if (table == null)
+            {
+                return Result.Failure("Table not found.", enErrorType.NotFound);
+            }
+
+            // Optional Business Rule: Check if table has active sessions before deleting
+            if (table.Status != enTableStatus.Available)
+            {
+                return Result.Failure("Cannot delete a table that is currently occupied or billing.", enErrorType.Validation);
+            }
+
+            await _tableRepository.DeleteTableAsync(table);
+            return Result.Success();
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\OrderingSystem.Domain.csproj
+----------------------------------------
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Common\Result.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Enums;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Common
+{
+    public class Result
+    {
+        public bool IsSuccess { get; }
+        public string? ErrorMessage { get; }
+        public enErrorType ErrorType { get; }
+
+        protected Result(bool isSuccess, string? errorMessage, enErrorType errorType)
+        {
+            IsSuccess = isSuccess;
+            ErrorMessage = errorMessage;
+            ErrorType = errorType;
+        }
+
+        public static Result Success() => new(true, null, enErrorType.None);
+        public static Result Failure(string message, enErrorType errorType = enErrorType.Failure)
+            => new(false, message, errorType);
+    }
+
+    public class Result<T> : Result
+    {
+        public T? Value { get; }
+
+        private Result(T? value, bool isSuccess, string? errorMessage, enErrorType errorType)
+            : base(isSuccess, errorMessage, errorType)
+        {
+            Value = value;
+        }
+
+        public static Result<T> Success(T value) => new(value, true, null, enErrorType.None);
+        public static new Result<T> Failure(string message, enErrorType errorType = enErrorType.Failure)
+            => new(default, false, message, errorType);
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Category.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class Category
+    {
+        public int CategoryId { get; set; }
+        public string NameAr { get; set; } = string.Empty;
+        public string NameEn { get; set; } = string.Empty;
+        public bool IsAvailable { get; set; }
+
+        // Navigation
+        public ICollection<MenuItem> MenuItems { get; set; } = new List<MenuItem>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\DeviceSession.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums; 
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class DeviceSession
+    {
+        public Guid DeviceSessionId { get; set; } // Also acts as the secure token for the device session
+        public Guid TableSessionId { get; set; }
+        public enDeviceRole Role { get; set; }
+        public bool IsApproved { get; set; }
+
+        // Navigation Properties
+        public TableSession TableSession { get; set; } = null!; // Avoid = new TableSession() to prevent EF Core from creating a new database row
+        public ICollection<Order> Orders { get; set; } = new List<Order>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\MenuItem.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class MenuItem
+    {
+        public int MenuItemId { get; set; }
+        public int CategoryId { get; set; }
+        public string NameAr { get; set; } = string.Empty;
+        public string NameEn { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public string ImageUrl { get; set; } = string.Empty;
+        public bool IsAvailable { get; set; }
+
+        // Navigation
+        public Category Category { get; set; } = new Category();
+        public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Order.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class Order
+    {
+        public int OrderId { get; set; }
+        public Guid TableSessionId { get; set; }
+        public Guid DeviceSessionId { get; set; }
+        public decimal TotalAmount { get; set; }
+        public enOrderStatusType OrderStatus { get; set; }
+        public DateTime CreatedAt { get; set; }
+
+        // Navigation
+        public TableSession Session { get; set; }
+        public DeviceSession Device { get; set; }
+        public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\OrderItem.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class OrderItem
+    {
+        public int OrderItemId { get; set; }
+        public int OrderId { get; set; }
+        public int MenuItemId { get; set; }
+        public int Quantity { get; set; }
+        public decimal UnitPrice { get; set; }
+
+        // Navigation
+        public Order Order { get; set; } = new Order();
+        public MenuItem MenuItem { get; set; } = new MenuItem();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Table.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class Table
+    {
+        public int TableId { get; set; }
+        public int TableNumber { get; set; }
+        public int Floor { get; set; }
+        public string QrCode { get; set; } = string.Empty;
+        public enTableStatus Status { get; set; }
+
+        // Navigation
+        public TableSession Session { get; set; } = null!;
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\TableSession.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class TableSession
+    {
+        public Guid TableSessionId { get; set; } // Also acts as the secure token for the table session
+        public int TableId { get; set; }
+        public enSessionStatus Status { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? ClosedAt { get; set; } // Nullable since it might not be closed yet
+
+        // Navigation Properties
+        // Using null! tells the compiler EF Core will handle populating this when loaded
+        public Table Table { get; set; } = null!;
+
+        // Initializing collections is correct and prevents NullReferenceExceptions
+        public ICollection<DeviceSession> Devices { get; set; } = new List<DeviceSession>();
+        public ICollection<Order> Orders { get; set; } = new List<Order>();
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\User.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class User
+    {
+        public int UserId { get; set; }
+        public string FullName { get; set; } = string.Empty;
+        public string PasswordHash { get; set; } = string.Empty;
+        public enRoleType Role { get; set; }
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enDeviceRole.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enDeviceRole
+    {
+        Host = 1,
+        Guest = 2
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enErrorType.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enErrorType
+    {
+        None = 0,
+        Validation = 400,
+        NotFound = 404,
+        BalanceViolation = 422,
+        Failure = 500
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enRoleType.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enRoleType
+    {
+        Admin = 1,
+        Accountant = 2,
+        Waiter = 3
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enSessionStatus.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enSessionStatus
+    {
+        PendingActivation = 1,
+        Active = 2,
+        Closed = 3
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enTableStatus.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enTableStatus
+    {
+        Available = 1,
+        Occupied = 2,
+        Billing = 3
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\OrderStatusType.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enOrderStatusType
+    {
+        Pending = 1,
+        Preparing = 2,
+        Served = 3,
+        Cancelled = 4
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\OrderingSystem.Infrastructure.csproj
+----------------------------------------
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.2.11" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
+	<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.9" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OrderingSystem.Application\OrderingSystem.Application.csproj" />
+    <ProjectReference Include="..\OrderingSystem.Domain\OrderingSystem.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Data\OrderingSystemDbContext.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Domain.Entities;
+
+namespace OrderingSystem.Infrastructure.Data
+{
+    public class OrderingSystemDbContext : DbContext
+    {
+        public OrderingSystemDbContext(DbContextOptions<OrderingSystemDbContext> options)
+            : base(options)
+        {
+        }
+
+        public DbSet<User> Users { get; set; }
+        public DbSet<Table> Tables { get; set; }
+        public DbSet<TableSession> TableSessions { get; set; }
+        public DbSet<Category> Categories { get; set; }
+        public DbSet<MenuItem> MenuItems { get; set; }
+        public DbSet<DeviceSession> SessionDevices { get; set; }
+        public DbSet<Order> Orders { get; set; }
+        public DbSet<OrderItem> OrderItems { get; set; }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+
+            // 1. Users
+            modelBuilder.Entity<User>(entity =>
+            {
+                entity.HasKey(e => e.UserId);
+                entity.Property(e => e.FullName).IsRequired().HasMaxLength(255);
+                entity.Property(e => e.PasswordHash).IsRequired();
+            });
+
+            // 2. Tables
+            modelBuilder.Entity<Table>(entity =>
+            {
+                entity.HasKey(e => e.TableId);
+            });
+
+            // 3. TableSessions
+            modelBuilder.Entity<TableSession>(entity =>
+            {
+                entity.HasKey(e => e.TableSessionId);
+
+                entity.HasOne(e => e.Table)
+                      .WithOne(t => t.Session)
+                      .HasForeignKey<TableSession>(e => e.TableId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // 4. Categories
+            modelBuilder.Entity<Category>(entity =>
+            {
+                entity.HasKey(e => e.CategoryId);
+                entity.Property(e => e.NameAr).HasMaxLength(255);
+                entity.Property(e => e.NameEn).HasMaxLength(255);
+            });
+
+            // 5. MenuItems
+            modelBuilder.Entity<MenuItem>(entity =>
+            {
+                entity.HasKey(e => e.MenuItemId);
+                entity.Property(e => e.Price).HasPrecision(18, 2);
+                entity.Property(e => e.NameAr).HasMaxLength(255);
+                entity.Property(e => e.NameEn).HasMaxLength(255);
+
+                entity.HasOne(e => e.Category)
+                      .WithMany(c => c.MenuItems)
+                      .HasForeignKey(e => e.CategoryId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // 6. DeviceSession
+            modelBuilder.Entity<DeviceSession>(entity =>
+            {
+                entity.HasKey(e => e.DeviceSessionId);
+
+                entity.HasOne(e => e.TableSession)
+                      .WithMany(s => s.Devices)
+                      .HasForeignKey(e => e.TableSessionId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // 7. Orders
+            modelBuilder.Entity<Order>(entity =>
+            {
+                entity.HasKey(e => e.OrderId);
+                entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
+
+                entity.HasOne(e => e.Session)
+                      .WithMany(s => s.Orders)
+                      .HasForeignKey(e => e.TableSessionId)
+                      .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasOne(e => e.Device)
+                      .WithMany(d => d.Orders)
+                      .HasForeignKey(e => e.DeviceSessionId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // 8. OrderItems
+            modelBuilder.Entity<OrderItem>(entity =>
+            {
+                entity.HasKey(e => e.OrderItemId);
+                entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
+
+                entity.HasOne(e => e.Order)
+                      .WithMany(o => o.OrderItems)
+                      .HasForeignKey(e => e.OrderId)
+                      .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(e => e.MenuItem)
+                      .WithMany(m => m.OrderItems)
+                      .HasForeignKey(e => e.MenuItemId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\ExternalServices\Notifications\SignalRNotifier.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.SignalR;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Infrastructure.ExternalServices.Notifications;
+
+namespace OrderingSystem.Infrastructure.Notifications
+{
+    public class SignalRNotifier : IRealTimeNotifier
+    {
+        private readonly IHubContext<TableSessionNotificationsHub, ITableSessionNotificationsHub> _hubContext;
+
+        public SignalRNotifier(IHubContext<TableSessionNotificationsHub, ITableSessionNotificationsHub> hubContext)
+        {
+            _hubContext = hubContext;
+        }
+
+        public async Task NotifyCashiersOfActivationAsync(int tableId, Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveActivationRequest(tableId, tableSessionId, $"Table {tableId} is requesting activation.");
+        }
+
+        public async Task NotifyHostOfGuestJoinAsync(Guid tableSessionId, Guid guestDeviceSessionId)
+        {
+            // The Host's frontend will have called JoinTableSessionGroup with this ID
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveJoinRequest(guestDeviceSessionId, "A new guest is requesting to join your table.");
+        }
+
+        public async Task NotifyGuestOfApprovalAsync(Guid guestDeviceSessionId)
+        {
+            // The Guest's frontend will have called RegisterDeviceGroup with this ID
+            await _hubContext.Clients.Group(guestDeviceSessionId.ToString())
+                .ReceiveApprovalNotification("Your request to join the table has been approved.");
+        }
+
+        public async Task NotifyWaitersOfNewOrderAsync(int tableId, int orderId)
+        {
+            // Example for future expansion
+            // await _hubContext.Clients.Group(OrderingHub.Groups.Waiters).ReceiveNewOrder(...);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\ExternalServices\Notifications\TableSessionNotificationsHub.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.SignalR;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Domain.Enums;
+using System.Security.Claims;
+
+namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
+{
+    public class TableSessionNotificationsHub : Hub<ITableSessionNotificationsHub>
+    {
+        // 1. RENAME THIS to avoid colliding with the base Hub.Groups property
+        public static class GroupNames
+        {
+            public const string Cashiers = "Group_Cashiers";
+            public const string Waiters = "Group_Waiters";
+        }
+
+        public override async Task OnConnectedAsync()
+        {
+            // Example: Auto-assign authenticated staff to groups based on their JWT claims
+            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
+
+            if (role == enRoleType.Accountant.ToString() || role == enRoleType.Admin.ToString())
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Cashiers);
+            }
+            else if (role == enRoleType.Waiter.ToString())
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Waiters);
+            }
+
+            await base.OnConnectedAsync();
+        }
+
+        // Table hosts/guests explicitly join a room for their specific session
+        public async Task JoinTableSessionGroup(Guid tableSessionId)
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, tableSessionId.ToString());
+        }
+
+        public async Task LeaveTableSessionGroup(Guid tableSessionId)
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, tableSessionId.ToString());
+        }
+
+        // Similarly, target specific devices by their unique ID
+        public async Task RegisterDeviceGroup(Guid deviceSessionId)
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, deviceSessionId.ToString());
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260628110709_InitialCreate.cs
+----------------------------------------
+﻿using System;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    /// <inheritdoc />
+    public partial class InitialCreate : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.CreateTable(
+                name: "Categories",
+                columns: table => new
+                {
+                    CategoryId = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    NameAr = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: false),
+                    NameEn = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: false),
+                    IsAvailable = table.Column<bool>(type: "boolean", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Categories", x => x.CategoryId);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "Tables",
+                columns: table => new
+                {
+                    TableId = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    TableNumber = table.Column<int>(type: "integer", nullable: false),
+                    Floor = table.Column<int>(type: "integer", nullable: false),
+                    QrCode = table.Column<string>(type: "text", nullable: false),
+                    Status = table.Column<int>(type: "integer", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Tables", x => x.TableId);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "Users",
+                columns: table => new
+                {
+                    UserId = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    FullName = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: false),
+                    PasswordHash = table.Column<string>(type: "text", nullable: false),
+                    Role = table.Column<int>(type: "integer", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Users", x => x.UserId);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "MenuItems",
+                columns: table => new
+                {
+                    MenuItemId = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    CategoryId = table.Column<int>(type: "integer", nullable: false),
+                    NameAr = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: false),
+                    NameEn = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: false),
+                    Description = table.Column<string>(type: "text", nullable: false),
+                    Price = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: false),
+                    ImageUrl = table.Column<string>(type: "text", nullable: false),
+                    IsAvailable = table.Column<bool>(type: "boolean", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_MenuItems", x => x.MenuItemId);
+                    table.ForeignKey(
+                        name: "FK_MenuItems_Categories_CategoryId",
+                        column: x => x.CategoryId,
+                        principalTable: "Categories",
+                        principalColumn: "CategoryId",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "TableSessions",
+                columns: table => new
+                {
+                    TableSessionId = table.Column<Guid>(type: "uuid", nullable: false),
+                    TableId = table.Column<int>(type: "integer", nullable: false),
+                    Status = table.Column<int>(type: "integer", nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    ClosedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_TableSessions", x => x.TableSessionId);
+                    table.ForeignKey(
+                        name: "FK_TableSessions_Tables_TableId",
+                        column: x => x.TableId,
+                        principalTable: "Tables",
+                        principalColumn: "TableId",
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "SessionDevices",
+                columns: table => new
+                {
+                    DeviceSessionId = table.Column<Guid>(type: "uuid", nullable: false),
+                    TableSessionId = table.Column<Guid>(type: "uuid", nullable: false),
+                    Role = table.Column<int>(type: "integer", nullable: false),
+                    IsApproved = table.Column<bool>(type: "boolean", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_SessionDevices", x => x.DeviceSessionId);
+                    table.ForeignKey(
+                        name: "FK_SessionDevices_TableSessions_TableSessionId",
+                        column: x => x.TableSessionId,
+                        principalTable: "TableSessions",
+                        principalColumn: "TableSessionId",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "Orders",
+                columns: table => new
+                {
+                    OrderId = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    TableSessionId = table.Column<Guid>(type: "uuid", nullable: false),
+                    DeviceSessionId = table.Column<Guid>(type: "uuid", nullable: false),
+                    TotalAmount = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: false),
+                    OrderStatus = table.Column<int>(type: "integer", nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Orders", x => x.OrderId);
+                    table.ForeignKey(
+                        name: "FK_Orders_SessionDevices_DeviceSessionId",
+                        column: x => x.DeviceSessionId,
+                        principalTable: "SessionDevices",
+                        principalColumn: "DeviceSessionId",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_Orders_TableSessions_TableSessionId",
+                        column: x => x.TableSessionId,
+                        principalTable: "TableSessions",
+                        principalColumn: "TableSessionId",
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "OrderItems",
+                columns: table => new
+                {
+                    OrderItemId = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    OrderId = table.Column<int>(type: "integer", nullable: false),
+                    MenuItemId = table.Column<int>(type: "integer", nullable: false),
+                    Quantity = table.Column<int>(type: "integer", nullable: false),
+                    UnitPrice = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_OrderItems", x => x.OrderItemId);
+                    table.ForeignKey(
+                        name: "FK_OrderItems_MenuItems_MenuItemId",
+                        column: x => x.MenuItemId,
+                        principalTable: "MenuItems",
+                        principalColumn: "MenuItemId",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_OrderItems_Orders_OrderId",
+                        column: x => x.OrderId,
+                        principalTable: "Orders",
+                        principalColumn: "OrderId",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_MenuItems_CategoryId",
+                table: "MenuItems",
+                column: "CategoryId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_OrderItems_MenuItemId",
+                table: "OrderItems",
+                column: "MenuItemId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_OrderItems_OrderId",
+                table: "OrderItems",
+                column: "OrderId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Orders_DeviceSessionId",
+                table: "Orders",
+                column: "DeviceSessionId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Orders_TableSessionId",
+                table: "Orders",
+                column: "TableSessionId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_SessionDevices_TableSessionId",
+                table: "SessionDevices",
+                column: "TableSessionId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TableSessions_TableId",
+                table: "TableSessions",
+                column: "TableId",
+                unique: true);
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropTable(
+                name: "OrderItems");
+
+            migrationBuilder.DropTable(
+                name: "Users");
+
+            migrationBuilder.DropTable(
+                name: "MenuItems");
+
+            migrationBuilder.DropTable(
+                name: "Orders");
+
+            migrationBuilder.DropTable(
+                name: "Categories");
+
+            migrationBuilder.DropTable(
+                name: "SessionDevices");
+
+            migrationBuilder.DropTable(
+                name: "TableSessions");
+
+            migrationBuilder.DropTable(
+                name: "Tables");
+        }
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260628110709_InitialCreate.Designer.cs
+----------------------------------------
+﻿// <auto-generated />
+using System;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+using OrderingSystem.Infrastructure.Data;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    [DbContext(typeof(OrderingSystemDbContext))]
+    [Migration("20260628110709_InitialCreate")]
+    partial class InitialCreate
+    {
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+
+            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Property<int>("CategoryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("CategoryId"));
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.HasKey("CategoryId");
+
+                    b.ToTable("Categories");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Property<Guid>("DeviceSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsApproved")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("SessionDevices");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Property<int>("MenuItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("MenuItemId"));
+
+                    b.Property<int>("CategoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ImageUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<decimal>("Price")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("MenuItemId");
+
+                    b.HasIndex("CategoryId");
+
+                    b.ToTable("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Property<int>("OrderId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeviceSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("OrderStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("OrderId");
+
+                    b.HasIndex("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.Property<int>("OrderItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderItemId"));
+
+                    b.Property<int>("MenuItemId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("OrderId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("OrderItemId");
+
+                    b.HasIndex("MenuItemId");
+
+                    b.HasIndex("OrderId");
+
+                    b.ToTable("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Property<int>("TableId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TableId"));
+
+                    b.Property<int>("Floor")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("QrCode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableNumber")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TableId");
+
+                    b.ToTable("Tables");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Property<Guid>("TableSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TableSessionId");
+
+                    b.HasIndex("TableId")
+                        .IsUnique();
+
+                    b.ToTable("TableSessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
+                {
+                    b.Property<int>("UserId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("UserId"));
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "TableSession")
+                        .WithMany("Devices")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TableSession");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Category", "Category")
+                        .WithMany("MenuItems")
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.DeviceSession", "Device")
+                        .WithMany("Orders")
+                        .HasForeignKey("DeviceSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "Session")
+                        .WithMany("Orders")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.MenuItem", "MenuItem")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("MenuItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.Order", "Order")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("MenuItem");
+
+                    b.Navigation("Order");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Table", "Table")
+                        .WithOne("Session")
+                        .HasForeignKey("OrderingSystem.Domain.Entities.TableSession", "TableId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Table");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Navigation("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Navigation("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Navigation("Session")
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Navigation("Devices");
+
+                    b.Navigation("Orders");
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\OrderingSystemDbContextModelSnapshot.cs
+----------------------------------------
+﻿// <auto-generated />
+using System;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+using OrderingSystem.Infrastructure.Data;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    [DbContext(typeof(OrderingSystemDbContext))]
+    partial class OrderingSystemDbContextModelSnapshot : ModelSnapshot
+    {
+        protected override void BuildModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+
+            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Property<int>("CategoryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("CategoryId"));
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.HasKey("CategoryId");
+
+                    b.ToTable("Categories");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Property<Guid>("DeviceSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsApproved")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("SessionDevices");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Property<int>("MenuItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("MenuItemId"));
+
+                    b.Property<int>("CategoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ImageUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<decimal>("Price")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("MenuItemId");
+
+                    b.HasIndex("CategoryId");
+
+                    b.ToTable("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Property<int>("OrderId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeviceSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("OrderStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("OrderId");
+
+                    b.HasIndex("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.Property<int>("OrderItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderItemId"));
+
+                    b.Property<int>("MenuItemId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("OrderId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("OrderItemId");
+
+                    b.HasIndex("MenuItemId");
+
+                    b.HasIndex("OrderId");
+
+                    b.ToTable("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Property<int>("TableId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TableId"));
+
+                    b.Property<int>("Floor")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("QrCode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableNumber")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TableId");
+
+                    b.ToTable("Tables");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Property<Guid>("TableSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TableSessionId");
+
+                    b.HasIndex("TableId")
+                        .IsUnique();
+
+                    b.ToTable("TableSessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
+                {
+                    b.Property<int>("UserId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("UserId"));
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "TableSession")
+                        .WithMany("Devices")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TableSession");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Category", "Category")
+                        .WithMany("MenuItems")
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.DeviceSession", "Device")
+                        .WithMany("Orders")
+                        .HasForeignKey("DeviceSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "Session")
+                        .WithMany("Orders")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.MenuItem", "MenuItem")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("MenuItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.Order", "Order")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("MenuItem");
+
+                    b.Navigation("Order");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Table", "Table")
+                        .WithOne("Session")
+                        .HasForeignKey("OrderingSystem.Domain.Entities.TableSession", "TableId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Table");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Navigation("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Navigation("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Navigation("Session")
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Navigation("Devices");
+
+                    b.Navigation("Orders");
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\DeviceSessionQuery.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Queries
+{
+    public class DeviceSessionQuery : IDeviceSessionQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public DeviceSessionQuery(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId)
+        {
+            return await _context.SessionDevices
+                .Include(ds => ds.TableSession) // Required because your command service uses ds.TableSession for mapping responses
+                .FirstOrDefaultAsync(ds => ds.DeviceSessionId == deviceSessionId);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\TableQuery.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Queries
+{
+    public class TableQuery : ITableQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableQuery(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task<string?> GetTableQrCodeAsync(int tableId)
+        {
+            return await _context.Tables
+                .AsNoTracking()
+                .Where(t => t.TableId == tableId)
+                .Select(t => t.QrCode)
+                .FirstOrDefaultAsync();
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\TableSessionQuery.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Mappers;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Queries
+{
+    public class TableSessionQuery : ITableSessionQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableSessionQuery(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        // ── Command-Side Hydration Query ─────────────────────────────────────────
+        public async Task<Table?> GetTableWithActiveSessionAsync(string qrCode)
+        {
+            // Fetches the domain entity for business rule validation in the Command service.
+            // Includes the Session navigation property so you can check table.Session != null.
+            return await _context.Tables
+                .Include(t => t.Session)
+                .FirstOrDefaultAsync(t => t.QrCode == qrCode);
+        }
+
+        // ── Pure Read-Side Query (CQRS) ──────────────────────────────────────────
+        public async Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId)
+        {
+            // Bypasses entity tracking and maps directly from SQL to your DTO.
+            // This eliminates the need for your SessionsMappers.cs on the read path entirely.
+            return await _context.TableSessions
+                .AsNoTracking()
+                .Where(s => s.TableId == tableId && s.Status == enSessionStatus.Active)
+                .Select(s => s.ToResponse())
+                .FirstOrDefaultAsync();
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\DeviceSessionRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Repositories
+{
+    public class DeviceSessionRepository : IDeviceSessionRepository
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public DeviceSessionRepository(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task AddSessionAsync(DeviceSession session)
+        {
+            _context.SessionDevices.Add(session);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task UpdateDeviceSessionAsync(DeviceSession session)
+        {
+            _context.SessionDevices.Update(session);
+            await _context.SaveChangesAsync();
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\TableRepository.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Repositories
+{
+    public class TableRepository : ITableRepository
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableRepository(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task AddTableAsync(Table table)
+        {
+            _context.Tables.Add(table);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task UpdateTableAsync(Table table)
+        {
+            _context.Tables.Update(table);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task DeleteTableAsync(Table table)
+        {
+            _context.Tables.Remove(table);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task<bool> ExistsAsync(int tableNumber, int floor)
+        {
+            return await _context.Tables.AnyAsync(t => t.TableNumber == tableNumber && t.Floor == floor);
+        }
+
+        public async Task<Table?> GetTableByIdAsync(int tableId)
+        {
+            return await _context.Tables.FirstOrDefaultAsync(t => t.TableId == tableId);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\TableSessionRepository.cs
+----------------------------------------
+﻿// File: OrderingSystem.Infrastructure/Services/TableSessionRepository.cs
+
+using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Mappers;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+
+namespace OrderingSystem.Infrastructure.Repositories
+{
+    public class TableSessionRepository : ITableSessionRepository
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableSessionRepository(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+
+        public async Task AddSessionAsync(TableSession session)
+        {
+            _context.TableSessions.Add(session);
+            await _context.SaveChangesAsync();
+        }
+    }
+}
+

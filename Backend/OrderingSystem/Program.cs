@@ -1,8 +1,17 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Services;
+using OrderingSystem.Infrastructure.Data;
+using OrderingSystem.Infrastructure.ExternalServices.Notifications;
+using OrderingSystem.Infrastructure.Notifications;
+using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -56,18 +65,26 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// ── Database Context ──────────────────────────────────────────────────────
+builder.Services.AddDbContextPool<OrderingSystemDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // ── Dependency Injections ──────────────────────────────────────────────────
-// In Program.cs or your Infrastructure dependency injection extension:
+builder.Services.AddSignalR();
+builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
 
-builder.Services.AddScoped<TableSessionRepository>();
+builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
 
-// Resolve both interfaces using the same concrete type registration
-builder.Services.AddScoped<ITableSessionRepository>(provider =>
-    provider.GetRequiredService<TableSessionRepository>());
+builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
+builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
 
-builder.Services.AddScoped<ITableSessionQuery>(provider =>
-    provider.GetRequiredService<TableSessionRepository>());
+builder.Services.AddScoped<IDeviceSessionRepository, DeviceSessionRepository>();
+builder.Services.AddScoped<IDeviceSessionQuery, DeviceSessionQuery>();
+
+builder.Services.AddScoped<ITableRepository, TableRepository>();
+builder.Services.AddScoped<ITableCommandService, TableCommandService>();
+builder.Services.AddScoped<ITableQuery, TableQuery>();
+
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -95,26 +112,46 @@ builder.Services.AddAuthentication(options =>
 
 builder.Services.AddAuthorization();
 
-// ── Allowing all requests for testing ────────────────────────────────────────────────────
+// ── Adding CORS policy ────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll",
-        builder => builder.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+    // 1. Wide-open policy for local development only
+    options.AddPolicy("DevelopmentPolicy", builder =>
+        builder.SetIsOriginAllowed(_ => true)
+               .AllowAnyMethod()
+               .AllowAnyHeader()
+               .AllowCredentials());
+
+    // 2. Iron-clad policy for Production
+    options.AddPolicy("ProductionPolicy", builder =>
+        builder.WithOrigins(
+                "http://127.0.0.1:5500"  // VS Code Live Server (if using basic HTML)
+               )
+               .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
+               .AllowCredentials());
 });
 
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
-app.UseExceptionHandler();
-
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    // Use the wide-open policy locally
+    app.UseCors("DevelopmentPolicy");
+}
+else
+{
+    // Enforce HTTPS routing in production
+    app.UseHttpsRedirection();
+    // Use the locked-down policy in production
+    app.UseCors("ProductionPolicy");
 }
 
-app.UseHttpsRedirection();
-app.UseCors("AllowAll"); // Delete on actual deployment
+app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
+
 app.UseAuthentication();
 app.UseAuthorization();
 

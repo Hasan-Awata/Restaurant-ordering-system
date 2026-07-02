@@ -8,6 +8,6 @@ namespace OrderingSystem.Domain.Enums
     {
         Available = 1,
         Occupied = 2,
-        WaitingBill = 3
+        Billing = 3
     }
 }

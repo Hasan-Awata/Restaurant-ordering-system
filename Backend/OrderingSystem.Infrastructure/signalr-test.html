@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Host Client - Real-Time Logs</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+
+        .controls {
+            background: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        input {
+            padding: 8px;
+            width: 300px;
+            font-family: monospace;
+        }
+
+        button {
+            padding: 8px 15px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+            button:hover {
+                background: #0056b3;
+            }
+
+        #log {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 15px;
+            height: 350px;
+            overflow-y: scroll;
+            font-family: Consolas, monospace;
+            border-radius: 5px;
+        }
+
+        .time {
+            color: #888;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Host Device - SignalR Client</h2>
+
+    <div class="controls">
+        <label>1. Paste your TableSessionId here:</label><br><br>
+        <input type="text" id="sessionIdInput" placeholder="e.g., 019f0e86-9467-74b7-9171-1993b329e10c">
+        <button onclick="connectAsHost()">Connect & Join Table Room</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        function logMessage(message) {
+            const logDiv = document.getElementById("log");
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<div><span class="time">[${time}]</span> ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        const connection = new signalR.HubConnectionBuilder()
+            .withUrl("http://localhost:5148/hubs/notifications/table-session")
+            .configureLogging(signalR.LogLevel.Information)
+            .build();
+
+        // The specific listener for Guest Join requests
+        connection.on("ReceiveJoinRequest", (deviceId, message) => {
+            logMessage(`🔵 <strong>[GUEST ALERT]</strong> Device ${deviceId} wants to join! | Message: ${message}`);
+        });
+
+        async function connectAsHost() {
+            const tableSessionId = document.getElementById("sessionIdInput").value.trim();
+            if (!tableSessionId) {
+                alert("Please enter a Table Session ID first!");
+                return;
+            }
+
+            try {
+                // 1. Start the connection
+                if (connection.state === signalR.HubConnectionState.Disconnected) {
+                    await connection.start();
+                    logMessage("✅ Connected to SignalR Hub successfully!");
+                }
+
+                // 2. THIS IS THE RIGHT WAY: Tell the Hub to put this connection into the specific Table's Group
+                await connection.invoke("JoinTableSessionGroup", tableSessionId);
+                logMessage(`🔗 Successfully joined the secure room for Table Session: <strong>${tableSessionId}</strong>`);
+                logMessage(`⏳ Waiting for guests to scan the QR code...`);
+
+            } catch (err) {
+                logMessage(`❌ Error: ${err.message}`);
+            }
+        }
+    </script>
+</body>
+</html>

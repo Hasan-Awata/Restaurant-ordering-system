@@ -8,31 +8,60 @@ namespace OrderingSystem.WebApi.Controllers
     [Route("api/tables/sessions")]
     public class TableSessionsController : ControllerBase
     {
-        private readonly ITableSessionCommand _commandService;
-        private readonly ITableSessionQuery _queryService;
+        private readonly ISessionCommandService _sessionCommandService;
+        private readonly ITableSessionQuery _sessionQueryService;
 
         // Explicit dependency routing
         public TableSessionsController(
-            ITableSessionCommand commandService,
-            ITableSessionQuery queryService)
+            ISessionCommandService sessionCommandService,
+            ITableSessionQuery sessionQueryService)
         {
-            _commandService = commandService;
-            _queryService = queryService;
+            _sessionCommandService = sessionCommandService;
+            _sessionQueryService = sessionQueryService;
         }
 
         // 1. WRITE ENDPOINT (Command Path)
-        [HttpPost("activate")]
-        public async Task<IActionResult> Activate([FromBody] ActivateSessionRequest request)
+        [HttpPost("qr")]
+        public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
-            var response = await _commandService.ActivateAsync(request);
-            return Ok(response);
+            // 1. Extract the secure cookie (if it exists)
+            Guid? secureDeviceId = null;
+            if (Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) &&
+                Guid.TryParse(cookieValue, out var parsedId))
+            {
+                secureDeviceId = parsedId;
+            }
+
+            // 2. Pass the clean DTO and the secure cookie value as separate parameters
+            var response = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, secureDeviceId);
+
+            // 3. If successful, set/refresh the secure cookie
+            if (response.IsSuccess && response.Value?.DeviceSession != null)
+            {
+                var cookieOptions = new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = true,
+                    SameSite = SameSiteMode.None,
+                    Expires = DateTime.UtcNow.AddHours(4)
+                };
+
+                Response.Cookies.Append(
+                    "DeviceSessionId",
+                    response.Value.DeviceSession.DeviceSessionId.ToString(),
+                    cookieOptions
+                );
+            }
+
+            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
+            return Ok(response.Value);
         }
 
         // 2. READ ENDPOINT (Query Path)
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {
-            var response = await _queryService.GetActiveSessionByTableAsync(tableId);
+            var response = await _sessionQueryService.GetActiveSessionByTableAsync(tableId);
             if (response == null) return NotFound($"No active session found for table ID {tableId}.");
 
             return Ok(response);

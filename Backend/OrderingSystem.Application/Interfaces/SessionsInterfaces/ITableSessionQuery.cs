@@ -1,4 +1,5 @@
 ﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Entities;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -7,6 +8,6 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
 {
     public interface ITableSessionQuery
     {
-        Task<SessionResponse?> GetActiveSessionByTableAsync(int tableId);
+        public Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId);
     }
 }
