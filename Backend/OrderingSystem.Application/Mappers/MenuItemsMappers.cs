@@ -24,7 +24,7 @@ namespace OrderingSystem.Application.Mappers
         {
             return new MenuItem
             {
-                MenuItemId = -1,
+                
                 CategoryId = request.CategoryId,
                 NameAr = request.NameAr,
                 NameEn = request.NameEn,
