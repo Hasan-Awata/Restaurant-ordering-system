@@ -35,6 +35,15 @@ namespace OrderingSystem.Infrastructure.Data
             modelBuilder.Entity<Table>(entity =>
             {
                 entity.HasKey(e => e.TableId);
+                entity.Property(e => e.TableNumber).IsRequired();
+                entity.Property(e => e.FloorNumber).IsRequired();
+                entity.Property(e => e.Status).IsRequired();
+                entity.Property(e => e.QrCode).IsRequired().HasMaxLength(255);
+
+                entity.HasMany(t => t.Sessions)
+                      .WithOne(ts => ts.Table)
+                      .HasForeignKey(ts => ts.TableId)
+                      .OnDelete(DeleteBehavior.Restrict);
             });
 
             // 3. TableSessions
