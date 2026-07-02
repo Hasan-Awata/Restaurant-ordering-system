@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace SpendWise.Application.DTOs.PagedResponse
+namespace OrderingSystem.Application.DTOs.Paged
 {
     public class PagedResponse<T>
     {

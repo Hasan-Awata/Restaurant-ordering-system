@@ -30,14 +30,14 @@ namespace OrderingSystem.Application.Services
             var newTable = new Table
             {
                 TableNumber = request.TableNumber,
-                Floor = request.Floor,
+                FloorNumber = request.Floor,
                 QrCode = generatedQrCode,
                 Status = enTableStatus.Available
             };
 
             await _tableRepository.AddTableAsync(newTable);
 
-            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.Floor, newTable.QrCode, newTable.Status);
+            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status);
             
             return Result<TableResponse>.Success(response);
         }
@@ -51,21 +51,21 @@ namespace OrderingSystem.Application.Services
             }
 
             // If changing floor/number, ensure no conflict
-            if ((table.TableNumber != request.TableNumber || table.Floor != request.Floor) &&
+            if ((table.TableNumber != request.TableNumber || table.FloorNumber != request.Floor) &&
                 await _tableRepository.ExistsAsync(request.TableNumber, request.Floor))
             {
                 return Result<TableResponse>.Failure("A table with this number already exists on this floor.", enErrorType.Validation);
             }
 
             table.TableNumber = request.TableNumber;
-            table.Floor = request.Floor;
+            table.FloorNumber = request.Floor;
             table.Status = request.Status;
 
             // Note: We deliberately do NOT update the QR code here, as the physical QR sticker on the table shouldn't break.
 
             await _tableRepository.UpdateTableAsync(table);
 
-            var response = new TableResponse(table.TableId, table.TableNumber, table.Floor, table.QrCode, table.Status);
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status);
             return Result<TableResponse>.Success(response);
         }
 

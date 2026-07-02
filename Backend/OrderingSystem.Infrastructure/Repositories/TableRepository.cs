@@ -34,7 +34,7 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task<bool> ExistsAsync(int tableNumber, int floor)
         {
-            return await _context.Tables.AnyAsync(t => t.TableNumber == tableNumber && t.Floor == floor);
+            return await _context.Tables.AnyAsync(t => t.TableNumber == tableNumber && t.FloorNumber == floor);
         }
 
         public async Task<Table?> GetTableByIdAsync(int tableId)

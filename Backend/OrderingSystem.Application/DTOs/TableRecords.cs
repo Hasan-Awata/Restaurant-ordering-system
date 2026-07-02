@@ -10,5 +10,5 @@ namespace OrderingSystem.Application.DTOs
     public record UpdateTableRequest(int TableId, int TableNumber, int Floor, enTableStatus Status);
 
     // Query/Command Response Payloads
-    public record TableResponse(int TableId, int TableNumber, int Floor, string QrCode, enTableStatus Status);
+    public record TableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status);
 }
