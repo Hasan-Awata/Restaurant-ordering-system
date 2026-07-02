@@ -7,6 +7,7 @@ using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Interfaces.MenueItem; // تأكد من وجود هذا الـ namespace
 using OrderingSystem.Application.Services;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Infrastructure.ExternalServices.Notifications;
@@ -20,7 +21,7 @@ using System.Threading.RateLimiting;
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Caching ──────────────────────────────────────────────────────────────
-builder.Services.AddMemoryCache(); 
+builder.Services.AddMemoryCache();
 
 // ── Controllers & JSON ───────────────────────────────────────────────────
 builder.Services.AddControllers()
@@ -35,7 +36,7 @@ builder.Services.AddRateLimiter(options =>
         limiterOptions.PermitLimit = 100;
         limiterOptions.Window = TimeSpan.FromMinutes(1);
         limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        limiterOptions.QueueLimit = 2; 
+        limiterOptions.QueueLimit = 2;
     });
 
     options.OnRejected = async (context, token) =>
@@ -73,24 +74,23 @@ builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
 // ── Dependency Injections ──────────────────────────────────────────────────
 builder.Services.AddSignalR();
 builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
-
 builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
-
 builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
 builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
-
 builder.Services.AddScoped<IDeviceSessionRepository, DeviceSessionRepository>();
 builder.Services.AddScoped<IDeviceSessionQuery, DeviceSessionQuery>();
-
 builder.Services.AddScoped<ITableRepository, TableRepository>();
 builder.Services.AddScoped<ITableCommandService, TableCommandService>();
 builder.Services.AddScoped<ITableQuery, TableQuery>();
+builder.Services.AddScoped<IMenueItemRepository, MenuItemRepsository>();
+builder.Services.AddScoped<IMenueItemCommandService, MenueItemCommandService>();
 
+// تم تفعيل السطر وتعديل اسم الكلاس بناءً على الـ Namespace الخاص بالـ Queries لديك لتجنب أخطاء الحقن
+builder.Services.AddScoped<IMenueItemQuery, MenuItemQuery>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
 var secretKey = jwtSettings["SecretKey"]!;
-
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -110,7 +110,6 @@ builder.Services.AddAuthentication(options =>
         Encoding.UTF8.GetBytes(secretKey))
     };
 });
-
 builder.Services.AddAuthorization();
 
 // ── Adding CORS policy ────────────────────────────────────────────────────
@@ -135,7 +134,6 @@ builder.Services.AddCors(options =>
 
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
-
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -150,12 +148,9 @@ else
     // Use the locked-down policy in production
     app.UseCors("ProductionPolicy");
 }
-
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
-
 app.UseAuthentication();
 app.UseAuthorization();
-
 app.MapControllers().RequireRateLimiting("Fixed");
 
 using (var scope = app.Services.CreateScope())
@@ -164,7 +159,7 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<OrderingSystemDbContext>();
-        context.Database.Migrate(); 
+        context.Database.Migrate();
     }
     catch (Exception ex)
     {
@@ -172,5 +167,4 @@ using (var scope = app.Services.CreateScope())
         logger.LogError(ex, "An error occurred while migrating the database.");
     }
 }
-
 app.Run();
