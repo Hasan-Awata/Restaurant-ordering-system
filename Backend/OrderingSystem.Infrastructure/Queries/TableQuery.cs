@@ -113,7 +113,7 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             var query = _context.Tables
                 .AsNoTracking()
-                .Where(t => t.Status == enTableStatus.Billing); 
+                .Where(t => t.Status == enTableStatus.Occupied); 
 
             var totalRecords = await query.CountAsync();
 

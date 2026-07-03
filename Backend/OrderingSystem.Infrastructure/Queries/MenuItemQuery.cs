@@ -21,7 +21,7 @@ namespace OrderingSystem.Infrastructure.Queries
             _context = context;
         }
 
-        // جلب عنصر واحد بواسطة الـ ID
+     
         public async Task<Result<MenuRecords.MenuItemResponse>> GetMenuItemAsync(int menuItemId)
         {
             var menuItem = await _context.MenuItems
@@ -132,7 +132,7 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<MenuRecords.MenuItemResponse>>.Success(pagedResponse);
         }
 
-        // بما أن هذا التابع يؤدي نفس وظيفة دالة GetMenuItemAsync، يمكننا استدعاؤها مباشرة للاختصار ومنع التكرار
+      
         public async Task<Result<MenuRecords.MenuItemResponse>> GetItemByIdAsync(int menuItemId)
         {
             return await GetMenuItemAsync(menuItemId);

@@ -40,6 +40,7 @@ namespace OrderingSystem.Application.DTOs
     decimal Price,
     string ImageUrl,
     bool IsAvailable
+
 );
 
     }
