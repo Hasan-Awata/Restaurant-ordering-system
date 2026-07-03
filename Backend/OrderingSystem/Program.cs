@@ -3,11 +3,12 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using OrderingSystem.Application.Interfaces.Category;
+using OrderingSystem.Application.Interfaces.MenueItem; // تأكد من وجود هذا الـ namespace
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
-using OrderingSystem.Application.Interfaces.MenueItem; // تأكد من وجود هذا الـ namespace
 using OrderingSystem.Application.Services;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Infrastructure.ExternalServices.Notifications;
@@ -85,8 +86,13 @@ builder.Services.AddScoped<ITableQuery, TableQuery>();
 builder.Services.AddScoped<IMenueItemRepository, MenuItemRepsository>();
 builder.Services.AddScoped<IMenueItemCommandService, MenueItemCommandService>();
 
+
+
 // تم تفعيل السطر وتعديل اسم الكلاس بناءً على الـ Namespace الخاص بالـ Queries لديك لتجنب أخطاء الحقن
 builder.Services.AddScoped<IMenueItemQuery, MenuItemQuery>();
+builder.Services.AddScoped<ICategoryCommandService, CategoryCommandService>();
+builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
+builder.Services.AddScoped<ICategoryQuery, CategoryQuery>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
