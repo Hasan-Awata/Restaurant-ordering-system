@@ -36,5 +36,18 @@ namespace OrderingSystem.Infrastructure.Repositories
             _context.TableSessions.Add(session);
             await _context.SaveChangesAsync();
         }
+
+       public async Task<TableSession?> GetSessionByIdAsync(Guid tableSessionId)
+        {
+            return await _context.TableSessions
+                .Include(s => s.Devices) 
+                .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId);
+        }
+
+        public async Task UpdateSessionAsync(TableSession session)
+        {
+            _context.TableSessions.Update(session);
+            await _context.SaveChangesAsync();
+        }
     }
 }

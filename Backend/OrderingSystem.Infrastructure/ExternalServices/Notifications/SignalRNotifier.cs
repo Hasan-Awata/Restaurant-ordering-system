@@ -30,13 +30,14 @@ namespace OrderingSystem.Infrastructure.Notifications
         {
             // The Guest's frontend will have called RegisterDeviceGroup with this ID
             await _hubContext.Clients.Group(guestDeviceSessionId.ToString())
-                .ReceiveApprovalNotification("Your request to join the table has been approved.");
+                .ReceiveHostApprovalNotification("Your request to join the table has been approved.");
         }
 
-        public async Task NotifyWaitersOfNewOrderAsync(int tableId, int orderId)
+        public async Task NotifyHostOfTableActivationAsync(Guid hostDeviceSessionId)
         {
-            // Example for future expansion
-            // await _hubContext.Clients.Group(OrderingHub.Groups.Waiters).ReceiveNewOrder(...);
+            // The Host connects to a group named after their DeviceSessionId while waiting
+            await _hubContext.Clients.Group(hostDeviceSessionId.ToString())
+                .ReceiveCashierApprovalNotification(hostDeviceSessionId, "Your table has been approved by the cashier and is now active.");
         }
     }
 }

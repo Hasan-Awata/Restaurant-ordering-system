@@ -9,6 +9,6 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyCashiersOfActivationAsync(int tableId, Guid tableSessionId);
         public Task NotifyHostOfGuestJoinAsync(Guid tableSessionId, Guid guestDeviceSessionId);
         public Task NotifyGuestOfApprovalAsync(Guid guestDeviceSessionId);
-        public Task NotifyWaitersOfNewOrderAsync(int tableId, int orderId);
+        public Task NotifyHostOfTableActivationAsync(Guid hostDeviceSessionId);
     }
 }

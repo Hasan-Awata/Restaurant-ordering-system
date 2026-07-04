@@ -9,6 +9,7 @@ namespace OrderingSystem.Application.DTOs
     // Command Payloads
     public record ProcessQrCodeRequest(string qrCode);
     public record ApproveJoiningSessionRequest(Guid deviceSessionId);
+    public record ActivateTableSessionRequest(Guid tableSessionId); 
     public record DeactivateSessionByAdminRequest(int TableId);
 
 

@@ -1,4 +1,5 @@
-﻿using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Infrastructure.Data;
 
@@ -16,7 +17,9 @@ namespace OrderingSystem.Infrastructure.Repositories
         // Reading Path
         public async Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId)
         {
-            return await _context.SessionDevices.FindAsync(deviceSessionId);
+            return await _context.SessionDevices
+                    .Include(ds => ds.TableSession) 
+                    .FirstOrDefaultAsync(ds => ds.DeviceSessionId == deviceSessionId);
         }
 
         public async Task AddSessionAsync(DeviceSession session)

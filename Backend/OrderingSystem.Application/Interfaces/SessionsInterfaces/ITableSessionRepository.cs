@@ -9,5 +9,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
     {
         public Task<Table?> GetTableWithActiveSessionAsync(string qrCode);
         public Task AddSessionAsync(TableSession session);
+        public Task<TableSession?> GetSessionByIdAsync(Guid tableSessionId);
+        public Task UpdateSessionAsync(TableSession session);
     }
 }
