@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OrderingSystem.Application.Interfaces.Category;
-using OrderingSystem.Application.Interfaces.MenueItem; // تأكد من وجود هذا الـ namespace
+using OrderingSystem.Application.Interfaces.MenueItem; 
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
@@ -88,7 +88,6 @@ builder.Services.AddScoped<IMenueItemCommandService, MenueItemCommandService>();
 
 
 
-// تم تفعيل السطر وتعديل اسم الكلاس بناءً على الـ Namespace الخاص بالـ Queries لديك لتجنب أخطاء الحقن
 builder.Services.AddScoped<IMenueItemQuery, MenuItemQuery>();
 builder.Services.AddScoped<ICategoryCommandService, CategoryCommandService>();
 builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();

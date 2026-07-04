@@ -8,8 +8,7 @@ namespace OrderingSystem.Application.Interfaces.Notifications
     {
         public Task ReceiveActivationRequest(int tableId, Guid tableSessionId, string message);
         public Task ReceiveJoinRequest(Guid deviceSessionId, string message);
-        public Task ReceiveApprovalNotification(string message);
-
-        // Add future notifications here (e.g., ReceiveNewOrder, ReceivePaymentAlert)
+        public Task ReceiveHostApprovalNotification(string message);
+        public Task ReceiveCashierApprovalNotification(Guid hostDeviceSessionId, string message);
     }
 }

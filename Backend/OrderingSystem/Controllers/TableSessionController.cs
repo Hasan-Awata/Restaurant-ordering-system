@@ -57,6 +57,27 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(response.Value);
         }
 
+        [HttpPost("activate")]
+        public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
+        {
+            var response = await _sessionCommandService.ActivateTableSessionAsync(request);
+
+            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
+
+            return Ok(response.Value);
+        }
+
+        [HttpPost("approve")]
+        public async Task<IActionResult> ApproveGuest([FromBody] ApproveJoiningSessionRequest request)
+        {
+            // The service method for this was still intact in your dump
+            var response = await _sessionCommandService.ApproveJoiningRequestAsync(request);
+
+            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
+
+            return Ok(response.Value);
+        }
+
         // 2. READ ENDPOINT (Query Path)
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)

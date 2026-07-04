@@ -46,6 +46,12 @@ namespace OrderingSystem.Application.Services
             {
                 if (activeSession.Status == enSessionStatus.PendingActivation)
                 {
+                    // Let the recognized Host reconnect to retrieve their session state
+                    if (deviceSessionId.HasValue && activeSession.Devices.Any(d => d.DeviceSessionId == deviceSessionId.Value))
+                    {
+                        return AccessTableSessionAsync(activeSession, deviceSessionId.Value);
+                    }
+
                     return Result<SessionResponse>.Failure("Table session is pending activation.", enErrorType.Conflict);
                 }
 
@@ -120,6 +126,34 @@ namespace OrderingSystem.Application.Services
             }
 
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(activeSession, deviceSession));
+        }
+
+        public async Task<Result<TableSessionResponse>> ActivateTableSessionAsync(ActivateTableSessionRequest request)
+        {
+            var session = await _tableSessionRepository.GetSessionByIdAsync(request.tableSessionId);
+
+            if (session == null)
+            {
+                return Result<TableSessionResponse>.Failure("Table session not found.", enErrorType.NotFound);
+            }
+
+            if (session.Status != enSessionStatus.PendingActivation)
+            {
+                return Result<TableSessionResponse>.Failure("Session is not pending activation.", enErrorType.Conflict);
+            }
+
+            // Process Activation
+            session.Status = enSessionStatus.Active;
+            await _tableSessionRepository.UpdateSessionAsync(session);
+
+            // Alert the Host that the menu is now unlocked
+            var hostDevice = session.Devices.FirstOrDefault(d => d.Role == enDeviceRole.Host);
+            if (hostDevice != null)
+            {
+                await _notifier.NotifyHostOfTableActivationAsync(hostDevice.DeviceSessionId);
+            }
+
+            return Result<TableSessionResponse>.Success(session.ToResponse());
         }
 
         public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request)
