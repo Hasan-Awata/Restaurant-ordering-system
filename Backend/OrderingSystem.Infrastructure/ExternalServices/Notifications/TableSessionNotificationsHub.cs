@@ -19,7 +19,7 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
             // Example: Auto-assign authenticated staff to groups based on their JWT claims
             var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
 
-            if (role == enRoleType.Accountant.ToString() || role == enRoleType.Admin.ToString())
+            if (role == enRoleType.Cashier.ToString() || role == enRoleType.Admin.ToString())
             {
                 await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Cashiers);
             }

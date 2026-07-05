@@ -19,6 +19,10 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\appsettin
     "SecretKey": "this_is_my_dummy_secret",
     "Issuer": "https://localhost:5148",
     "Audience": "https://localhost:5148"
+  },
+  "AdminSettings": {
+    "DefaultPassword": "",
+    "FullName": ""
   }
 }
 
@@ -37,9 +41,13 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\appsettin
   },
   "AllowedHosts": "*",
   "JwtSettings": {
-    "SecretKey": "this_is_my_dummy_secret",
+    "SecretKey": "",
     "Issuer": "https://localhost:5148",
     "Audience": "https://localhost:5148"
+  },
+  "AdminSettings": {
+    "DefaultPassword": "",
+    "FullName": ""
   }
 }
 
@@ -88,6 +96,8 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using OrderingSystem.Application.Interfaces.Auth;
+using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem; 
 using OrderingSystem.Application.Interfaces.Notifications;
@@ -95,11 +105,13 @@ using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Services;
+using OrderingSystem.Infrastructure.Authentication;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Infrastructure.ExternalServices.Notifications;
 using OrderingSystem.Infrastructure.Notifications;
 using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
+using OrderingSystem.Infrastructure.Seeding;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -170,13 +182,13 @@ builder.Services.AddScoped<ITableCommandService, TableCommandService>();
 builder.Services.AddScoped<ITableQuery, TableQuery>();
 builder.Services.AddScoped<IMenueItemRepository, MenuItemRepsository>();
 builder.Services.AddScoped<IMenueItemCommandService, MenueItemCommandService>();
-
-
-
 builder.Services.AddScoped<IMenueItemQuery, MenuItemQuery>();
 builder.Services.AddScoped<ICategoryCommandService, CategoryCommandService>();
 builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
 builder.Services.AddScoped<ICategoryQuery, CategoryQuery>();
+builder.Services.AddScoped<IAuthCommandService, AuthCommandService>();
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<IJwtProvider, JwtProvider>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -199,6 +211,24 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(
         Encoding.UTF8.GetBytes(secretKey))
     };
+
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            var path = context.HttpContext.Request.Path;
+
+            // If the request is for our SignalR hub and contains a token in the query
+            if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+            {
+                // Tell the middleware to use this token for authentication
+                context.Token = accessToken;
+            }
+
+            return Task.CompletedTask;
+        }
+    };
 });
 builder.Services.AddAuthorization();
 
@@ -215,7 +245,9 @@ builder.Services.AddCors(options =>
     // 2. Iron-clad policy for Production
     options.AddPolicy("ProductionPolicy", builder =>
         builder.WithOrigins(
-                "http://127.0.0.1:5500"  // VS Code Live Server (if using basic HTML)
+                "http://127.0.0.1:5500",
+                "http://localhost:3000",
+                "http://localhost:8080"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
@@ -228,6 +260,7 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    app.UseRouting();
     // Use the wide-open policy locally
     app.UseCors("DevelopmentPolicy");
 }
@@ -235,13 +268,15 @@ else
 {
     // Enforce HTTPS routing in production
     app.UseHttpsRedirection();
+    app.UseRouting();
     // Use the locked-down policy in production
     app.UseCors("ProductionPolicy");
 }
-app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers().RequireRateLimiting("Fixed");
+app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 
 using (var scope = app.Services.CreateScope())
 {
@@ -249,7 +284,12 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<OrderingSystemDbContext>();
+        
+        var config = services.GetRequiredService<IConfiguration>();
+
         context.Database.Migrate();
+
+        await DatabaseSeeder.SeedAdminUserAsync(context, config);
     }
     catch (Exception ex)
     {
@@ -258,6 +298,47 @@ using (var scope = app.Services.CreateScope())
     }
 }
 app.Run();
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\AuthController.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Auth;
+using OrderingSystem.Application.Interfaces.Authentication;
+
+namespace OrderingSystem.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/auth")]
+    public class AuthController : ControllerBase
+    {
+        private readonly IAuthCommandService _authCommandService;
+
+        public AuthController(IAuthCommandService authCommandService)
+        {
+            _authCommandService = authCommandService;
+        }
+
+        [HttpPost("login")]
+        public async Task<IActionResult> Login([FromBody] LoginRequest request)
+        {
+            var result = await _authCommandService.LoginAsync(request);
+            if (!result.IsSuccess) return Unauthorized(result.ErrorMessage);
+            return Ok(result.Value);
+        }
+
+        [Authorize(Roles = "Admin")]
+        [HttpPost("register")]
+        public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
+        {
+            var result = await _authCommandService.CreateUserAsync(request);
+            if (!result.IsSuccess) return BadRequest(result.ErrorMessage);
+            return Ok(result.Value);
+        }
+    }
+}
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\CategoriesController.cs
@@ -636,6 +717,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 ﻿using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.DTOs;
+using Microsoft.AspNetCore.Authorization;
 
 namespace OrderingSystem.WebApi.Controllers
 {
@@ -691,7 +773,7 @@ namespace OrderingSystem.WebApi.Controllers
             if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
             return Ok(response.Value);
         }
-
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -714,6 +796,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // 2. READ ENDPOINT (Query Path)
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {
@@ -767,6 +850,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -775,6 +859,9 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.9" />
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.0.1" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -782,6 +869,23 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
   </ItemGroup>
 
 </Project>
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\AuthRecords.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Enums;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.DTOs
+{
+        public record LoginRequest(string FullName, string Password);
+        public record LoginResponse(string Token, string FullName, enRoleType Role);
+        public record CreateUserRequest(string FullName, string Password, enRoleType Role);
+        public record UserResponse(int UserId, string FullName, enRoleType Role);
+}
 
 
 
@@ -966,6 +1070,57 @@ namespace OrderingSystem.Application.DTOs.Paged
     }
 }
 
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\Authentication\IAuthCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Common;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.Authentication
+{
+    public interface IAuthCommandService
+    {
+        Task<Result<LoginResponse>> LoginAsync(LoginRequest request);
+        Task<Result<UserResponse>> CreateUserAsync(CreateUserRequest request);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\Authentication\IJwtProvider.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using OrderingSystem.Domain.Entities;
+
+namespace OrderingSystem.Application.Interfaces.Authentication
+{
+    public interface IJwtProvider
+    {
+        string GenerateToken(User user);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\Authentication\IUserRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+
+namespace OrderingSystem.Application.Interfaces.Auth
+{
+    public interface IUserRepository
+    {
+        Task<User?> GetUserByFullNameAsync(string fullName);
+        Task<bool> UserExistsAsync(string fullName);
+        Task AddUserAsync(User user);
+    }
+}
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\Category\ICategoryCommandService.cs
@@ -1456,6 +1611,73 @@ namespace OrderingSystem.Application.Mappers
 }
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\AuthCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Auth;
+using OrderingSystem.Application.Interfaces.Authentication;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Application.Services
+{
+    public class AuthCommandService : IAuthCommandService
+    {
+        private readonly IUserRepository _userRepository;
+        private readonly IJwtProvider _jwtProvider;
+
+        public AuthCommandService(IUserRepository userRepository, IJwtProvider jwtProvider)
+        {
+            _userRepository = userRepository;
+            _jwtProvider = jwtProvider;
+        }
+
+        public async Task<Result<LoginResponse>> LoginAsync(LoginRequest request)
+        {
+            // Note: Hashing should be applied to request.Password before querying
+            var user = await _userRepository.GetUserByFullNameAsync(request.FullName);
+
+            if (user == null)
+            {
+                return Result<LoginResponse>.Failure("Account was not found.", enErrorType.Unauthorized);
+            }
+            
+
+            if (!BCrypt.Net.BCrypt.EnhancedVerify(request.Password, user.PasswordHash)) 
+            { 
+                return Result<LoginResponse>.Failure("Invalid password.", enErrorType.Unauthorized);
+            }
+            
+            var token = _jwtProvider.GenerateToken(user);
+            var response = new LoginResponse(token, user.FullName, user.Role);
+
+            return Result<LoginResponse>.Success(response);
+        }
+
+        public async Task<Result<UserResponse>> CreateUserAsync(CreateUserRequest request)
+        {
+            if (await _userRepository.UserExistsAsync(request.FullName))
+            {
+                return Result<UserResponse>.Failure("User already exists.", enErrorType.Conflict);
+            }
+
+            var newUser = new User
+            {
+                FullName = request.FullName,
+                PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(request.Password), 
+                Role = request.Role
+            };
+
+            await _userRepository.AddUserAsync(newUser);
+
+            var response = new UserResponse(newUser.UserId, newUser.FullName, newUser.Role);
+            return Result<UserResponse>.Success(response);
+        }
+    }
+}
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\CategoriesCommandService.cs
 ----------------------------------------
 ﻿using OrderingSystem.Application.DTOs;
@@ -1569,6 +1791,56 @@ namespace OrderingSystem.Application.Services
 
             await _categoryRepository.DeleteCategoryAsync(existingCategory);
             return Result<bool>.Success(true);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\JwtProvider.cs
+----------------------------------------
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.IdentityModel.Tokens;
+using OrderingSystem.Application.Interfaces.Authentication;
+using OrderingSystem.Domain.Entities;
+using System;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+
+namespace OrderingSystem.Infrastructure.Authentication
+{
+    public class JwtProvider : IJwtProvider
+    {
+        private readonly IConfiguration _config;
+
+        public JwtProvider(IConfiguration config)
+        {
+            _config = config;
+        }
+
+        public string GenerateToken(User user)
+        {
+            var jwtSettings = _config.GetSection("JwtSettings");
+            var secretKey = jwtSettings["SecretKey"]!;
+
+            var claims = new[]
+            {
+                new Claim(JwtRegisteredClaimNames.Sub, user.UserId.ToString()),
+                new Claim(ClaimTypes.Role, user.Role.ToString())
+            };
+
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var token = new JwtSecurityToken(
+                issuer: jwtSettings["Issuer"],
+                audience: jwtSettings["Audience"],
+                claims: claims,
+                expires: DateTime.UtcNow.AddHours(12),
+                signingCredentials: creds
+            );
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
         }
     }
 }
@@ -1765,6 +2037,12 @@ namespace OrderingSystem.Application.Services
             {
                 if (activeSession.Status == enSessionStatus.PendingActivation)
                 {
+                    // Let the recognized Host reconnect to retrieve their session state
+                    if (deviceSessionId.HasValue && activeSession.Devices.Any(d => d.DeviceSessionId == deviceSessionId.Value))
+                    {
+                        return AccessTableSessionAsync(activeSession, deviceSessionId.Value);
+                    }
+
                     return Result<SessionResponse>.Failure("Table session is pending activation.", enErrorType.Conflict);
                 }
 
@@ -2237,7 +2515,7 @@ namespace OrderingSystem.Domain.Entities
         public int UserId { get; set; }
         public string FullName { get; set; } = string.Empty;
         public string PasswordHash { get; set; } = string.Empty;
-        public enRoleType Role { get; set; }
+        public enRoleType Role { get; set; } 
     }
 }
 
@@ -2293,7 +2571,7 @@ namespace OrderingSystem.Domain.Enums
     public enum enRoleType
     {
         Admin = 1,
-        Accountant = 2,
+        Cashier = 2,
         Waiter = 3
     }
 }
@@ -2421,6 +2699,7 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.HasKey(e => e.UserId);
                 entity.Property(e => e.FullName).IsRequired().HasMaxLength(255);
                 entity.Property(e => e.PasswordHash).IsRequired();
+                entity.Property(e => e.Role).IsRequired();
             });
 
             // 2. Tables
@@ -2590,7 +2869,7 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
             // Example: Auto-assign authenticated staff to groups based on their JWT claims
             var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
 
-            if (role == enRoleType.Accountant.ToString() || role == enRoleType.Admin.ToString())
+            if (role == enRoleType.Cashier.ToString() || role == enRoleType.Admin.ToString())
             {
                 await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Cashiers);
             }
@@ -4125,7 +4404,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("CategoryId");
 
-                    b.ToTable("Categories");
+                    b.ToTable("Categories", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
@@ -4147,7 +4426,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("TableSessionId");
 
-                    b.ToTable("SessionDevices");
+                    b.ToTable("SessionDevices", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
@@ -4190,7 +4469,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("CategoryId");
 
-                    b.ToTable("MenuItems");
+                    b.ToTable("MenuItems", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
@@ -4223,7 +4502,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("TableSessionId");
 
-                    b.ToTable("Orders");
+                    b.ToTable("Orders", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
@@ -4253,7 +4532,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("OrderId");
 
-                    b.ToTable("OrderItems");
+                    b.ToTable("OrderItems", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
@@ -4280,7 +4559,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TableId");
 
-                    b.ToTable("Tables");
+                    b.ToTable("Tables", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
@@ -4305,7 +4584,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("TableId");
 
-                    b.ToTable("TableSessions");
+                    b.ToTable("TableSessions", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
@@ -4330,7 +4609,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("UserId");
 
-                    b.ToTable("Users");
+                    b.ToTable("Users", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
@@ -4960,7 +5239,8 @@ namespace OrderingSystem.Infrastructure.Repositories
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\DeviceSessionRepository.cs
 ----------------------------------------
-﻿using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Infrastructure.Data;
 
@@ -4978,7 +5258,9 @@ namespace OrderingSystem.Infrastructure.Repositories
         // Reading Path
         public async Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId)
         {
-            return await _context.SessionDevices.FindAsync(deviceSessionId);
+            return await _context.SessionDevices
+                    .Include(ds => ds.TableSession) 
+                    .FirstOrDefaultAsync(ds => ds.DeviceSessionId == deviceSessionId);
         }
 
         public async Task AddSessionAsync(DeviceSession session)
@@ -5170,6 +5452,82 @@ namespace OrderingSystem.Infrastructure.Repositories
         {
             _context.TableSessions.Update(session);
             await _context.SaveChangesAsync();
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\UserRepository.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.Auth;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Infrastructure.Data;
+using System.Threading.Tasks;
+
+namespace OrderingSystem.Infrastructure.Repositories
+{
+    public class UserRepository : IUserRepository
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public UserRepository(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task<User?> GetUserByFullNameAsync(string fullName)
+        {
+            return await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.FullName == fullName);
+        }
+
+        public async Task<bool> UserExistsAsync(string fullName)
+        {
+            return await _context.Users.AnyAsync(u => u.FullName == fullName);
+        }
+
+        public async Task AddUserAsync(User user)
+        {
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Seeding\DatabaseSeeder.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Seeding
+{
+    public static class DatabaseSeeder
+    {
+        public static async Task SeedAdminUserAsync(OrderingSystemDbContext context, IConfiguration config)
+        {
+            var defaultPassword = config["AdminSettings:DefaultPassword"]
+                    ?? throw new InvalidOperationException("AdminSettings:DefaultPassword is missing from configuration.");
+
+            var defaultFullName = config["AdminSettings:FullName"] ?? "MasterAdmin";
+
+            if (!await context.Users.AnyAsync(u => u.Role == enRoleType.Admin))
+            {
+                var initialAdmin = new User
+                {
+                    FullName = defaultFullName,
+                    PasswordHash = BCrypt.Net.BCrypt.HashPassword(defaultPassword),
+                    Role = enRoleType.Admin
+                };
+
+                context.Users.Add(initialAdmin);
+                await context.SaveChangesAsync();
+            }
         }
     }
 }

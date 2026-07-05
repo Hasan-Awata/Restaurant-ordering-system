@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using OrderingSystem.Application.Interfaces.Auth;
+using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem; 
 using OrderingSystem.Application.Interfaces.Notifications;
@@ -10,11 +12,13 @@ using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Services;
+using OrderingSystem.Infrastructure.Authentication;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Infrastructure.ExternalServices.Notifications;
 using OrderingSystem.Infrastructure.Notifications;
 using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
+using OrderingSystem.Infrastructure.Seeding;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -85,13 +89,13 @@ builder.Services.AddScoped<ITableCommandService, TableCommandService>();
 builder.Services.AddScoped<ITableQuery, TableQuery>();
 builder.Services.AddScoped<IMenueItemRepository, MenuItemRepsository>();
 builder.Services.AddScoped<IMenueItemCommandService, MenueItemCommandService>();
-
-
-
 builder.Services.AddScoped<IMenueItemQuery, MenuItemQuery>();
 builder.Services.AddScoped<ICategoryCommandService, CategoryCommandService>();
 builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
 builder.Services.AddScoped<ICategoryQuery, CategoryQuery>();
+builder.Services.AddScoped<IAuthCommandService, AuthCommandService>();
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<IJwtProvider, JwtProvider>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -114,6 +118,24 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(
         Encoding.UTF8.GetBytes(secretKey))
     };
+
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            var path = context.HttpContext.Request.Path;
+
+            // If the request is for our SignalR hub and contains a token in the query
+            if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+            {
+                // Tell the middleware to use this token for authentication
+                context.Token = accessToken;
+            }
+
+            return Task.CompletedTask;
+        }
+    };
 });
 builder.Services.AddAuthorization();
 
@@ -130,7 +152,9 @@ builder.Services.AddCors(options =>
     // 2. Iron-clad policy for Production
     options.AddPolicy("ProductionPolicy", builder =>
         builder.WithOrigins(
-                "http://127.0.0.1:5500"  // VS Code Live Server (if using basic HTML)
+                "http://127.0.0.1:5500",
+                "http://localhost:3000",
+                "http://localhost:8080"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
@@ -143,6 +167,7 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    app.UseRouting();
     // Use the wide-open policy locally
     app.UseCors("DevelopmentPolicy");
 }
@@ -150,13 +175,15 @@ else
 {
     // Enforce HTTPS routing in production
     app.UseHttpsRedirection();
+    app.UseRouting();
     // Use the locked-down policy in production
     app.UseCors("ProductionPolicy");
 }
-app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers().RequireRateLimiting("Fixed");
+app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 
 using (var scope = app.Services.CreateScope())
 {
@@ -164,7 +191,12 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<OrderingSystemDbContext>();
+        
+        var config = services.GetRequiredService<IConfiguration>();
+
         context.Database.Migrate();
+
+        await DatabaseSeeder.SeedAdminUserAsync(context, config);
     }
     catch (Exception ex)
     {

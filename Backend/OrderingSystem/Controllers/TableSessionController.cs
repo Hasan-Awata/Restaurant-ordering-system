@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.DTOs;
+using Microsoft.AspNetCore.Authorization;
 
 namespace OrderingSystem.WebApi.Controllers
 {
@@ -56,7 +57,7 @@ namespace OrderingSystem.WebApi.Controllers
             if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
             return Ok(response.Value);
         }
-
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -79,6 +80,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // 2. READ ENDPOINT (Query Path)
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {
