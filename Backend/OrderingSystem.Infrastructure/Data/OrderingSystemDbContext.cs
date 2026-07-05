@@ -29,6 +29,7 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.HasKey(e => e.UserId);
                 entity.Property(e => e.FullName).IsRequired().HasMaxLength(255);
                 entity.Property(e => e.PasswordHash).IsRequired();
+                entity.Property(e => e.Role).IsRequired();
             });
 
             // 2. Tables

@@ -7,7 +7,7 @@ namespace OrderingSystem.Domain.Enums
     public enum enRoleType
     {
         Admin = 1,
-        Accountant = 2,
+        Cashier = 2,
         Waiter = 3
     }
 }

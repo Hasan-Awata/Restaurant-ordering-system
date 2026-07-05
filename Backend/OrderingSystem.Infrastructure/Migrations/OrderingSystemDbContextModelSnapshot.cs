@@ -45,7 +45,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("CategoryId");
 
-                    b.ToTable("Categories");
+                    b.ToTable("Categories", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
@@ -67,7 +67,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("TableSessionId");
 
-                    b.ToTable("SessionDevices");
+                    b.ToTable("SessionDevices", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
@@ -110,7 +110,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("CategoryId");
 
-                    b.ToTable("MenuItems");
+                    b.ToTable("MenuItems", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
@@ -143,7 +143,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("TableSessionId");
 
-                    b.ToTable("Orders");
+                    b.ToTable("Orders", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
@@ -173,7 +173,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("OrderId");
 
-                    b.ToTable("OrderItems");
+                    b.ToTable("OrderItems", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
@@ -200,7 +200,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TableId");
 
-                    b.ToTable("Tables");
+                    b.ToTable("Tables", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
@@ -225,7 +225,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("TableId");
 
-                    b.ToTable("TableSessions");
+                    b.ToTable("TableSessions", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
@@ -250,7 +250,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("UserId");
 
-                    b.ToTable("Users");
+                    b.ToTable("Users", (string)null);
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
