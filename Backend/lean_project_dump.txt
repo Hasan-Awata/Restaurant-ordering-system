@@ -16,7 +16,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\appsettin
   },
   "AllowedHosts": "*",
   "JwtSettings": {
-    "SecretKey": "this_is_my_dummy_secret",
+    "SecretKey": "xZ8vL3kM9pQ2wR5tY7hJ4nF1cC6bN0mXvZ8vL3kM9pQ2wR5tY7hJ4nF1cC6bN0m",
     "Issuer": "https://localhost:5148",
     "Audience": "https://localhost:5148"
   },
@@ -5521,7 +5521,7 @@ namespace OrderingSystem.Infrastructure.Seeding
                 var initialAdmin = new User
                 {
                     FullName = defaultFullName,
-                    PasswordHash = BCrypt.Net.BCrypt.HashPassword(defaultPassword),
+                    PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(defaultPassword),
                     Role = enRoleType.Admin
                 };
 

@@ -30,6 +30,13 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.FullName).IsRequired().HasMaxLength(255);
                 entity.Property(e => e.PasswordHash).IsRequired();
                 entity.Property(e => e.Role).IsRequired();
+                entity.Property(e => e.RefreshToken)
+                      .HasMaxLength(255)
+                      .IsRequired(false);
+                entity.Property(e => e.RefreshTokenExpiryTime)
+                      .IsRequired(false);
+                entity.Property(e => e.AbsoluteRefreshTokenExpiryTime)
+                      .IsRequired(false);
             });
 
             // 2. Tables

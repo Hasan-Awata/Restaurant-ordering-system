@@ -4,6 +4,8 @@ using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 namespace OrderingSystem.Application.Services
 {
@@ -20,23 +22,62 @@ namespace OrderingSystem.Application.Services
 
         public async Task<Result<LoginResponse>> LoginAsync(LoginRequest request)
         {
-            // Note: Hashing should be applied to request.Password before querying
             var user = await _userRepository.GetUserByFullNameAsync(request.FullName);
 
-            if (user == null)
+            if (user == null || !BCrypt.Net.BCrypt.EnhancedVerify(request.Password, user.PasswordHash))
             {
-                return Result<LoginResponse>.Failure("Account was not found.", enErrorType.Unauthorized);
+                return Result<LoginResponse>.Failure("Invalid credentials.", enErrorType.Unauthorized);
             }
-            
 
-            if (!BCrypt.Net.BCrypt.EnhancedVerify(request.Password, user.PasswordHash)) 
-            { 
-                return Result<LoginResponse>.Failure("Invalid password.", enErrorType.Unauthorized);
+            var (token, expiryTime) = _jwtProvider.GenerateToken(user);
+            var refreshToken = _jwtProvider.GenerateRefreshToken();
+
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            await _userRepository.UpdateUserAsync(user);
+
+            var response = new LoginResponse(token, refreshToken, expiryTime, user.FullName, user.Role);
+            return Result<LoginResponse>.Success(response);
+        }
+
+        public async Task<Result<LoginResponse>> RefreshTokenAsync(RefreshTokenRequest request)
+        {
+            var principal = _jwtProvider.GetPrincipalFromExpiredToken(request.AccessToken);
+
+            if (principal == null)
+                return Result<LoginResponse>.Failure("Invalid access token.", enErrorType.Unauthorized);
+
+            var userIdClaim = principal.FindFirst(ClaimTypes.NameIdentifier) ?? principal.FindFirst(JwtRegisteredClaimNames.Sub);
+            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                return Result<LoginResponse>.Failure("Invalid token claims.", enErrorType.Unauthorized);
+
+            var user = await _userRepository.GetUserByIdAsync(userId);
+
+            if (user == null ||
+                user.RefreshToken != request.RefreshToken ||
+                user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+            {
+                return Result<LoginResponse>.Failure("Invalid or expired refresh token.", enErrorType.Unauthorized);
             }
-            
-            var token = _jwtProvider.GenerateToken(user);
-            var response = new LoginResponse(token, user.FullName, user.Role);
 
+            if (user.AbsoluteRefreshTokenExpiryTime <= DateTime.UtcNow)
+            {
+                // Force them to log in again
+                user.RefreshToken = null;
+                await _userRepository.UpdateUserAsync(user);
+
+                return Result<LoginResponse>.Failure("Session expired. Please log in again.", enErrorType.Unauthorized);
+            }
+
+            // Generate new rotated tokens
+            var (newAccessToken, expiryTime) = _jwtProvider.GenerateToken(user);
+            var newRefreshToken = _jwtProvider.GenerateRefreshToken();
+
+            user.RefreshToken = newRefreshToken;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            await _userRepository.UpdateUserAsync(user);
+
+            var response = new LoginResponse(newAccessToken, newRefreshToken, expiryTime, user.FullName, user.Role);
             return Result<LoginResponse>.Success(response);
         }
 
@@ -58,6 +99,25 @@ namespace OrderingSystem.Application.Services
 
             var response = new UserResponse(newUser.UserId, newUser.FullName, newUser.Role);
             return Result<UserResponse>.Success(response);
+        }
+
+        public async Task<Result> LogoutAsync(int userId)
+        {
+            var user = await _userRepository.GetUserByIdAsync(userId);
+
+            if (user == null)
+            {
+                return Result.Failure("User not found.", enErrorType.NotFound);
+            }
+
+            // Revoke the tokens
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = null;
+            user.AbsoluteRefreshTokenExpiryTime = null;
+
+            await _userRepository.UpdateUserAsync(user);
+
+            return Result.Success();
         }
     }
 }
