@@ -305,8 +305,9 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
-using OrderingSystem.Application.Interfaces.Auth;
 using OrderingSystem.Application.Interfaces.Authentication;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 namespace OrderingSystem.WebApi.Controllers
 {
@@ -336,6 +337,37 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _authCommandService.CreateUserAsync(request);
             if (!result.IsSuccess) return BadRequest(result.ErrorMessage);
             return Ok(result.Value);
+        }
+
+        [HttpPost("refresh-token")]
+        public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
+        {
+            var result = await _authCommandService.RefreshTokenAsync(request);
+
+            if (!result.IsSuccess)
+                return Unauthorized(result.ErrorMessage);
+
+            return Ok(result.Value);
+        }
+
+        [Authorize]
+        [HttpPost("logout")]
+        public async Task<IActionResult> Logout()
+        {
+            // Extract the UserId from the JWT token claims
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier) ?? User.FindFirst(JwtRegisteredClaimNames.Sub);
+
+            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+            {
+                return Unauthorized("Invalid token claims.");
+            }
+
+            var result = await _authCommandService.LogoutAsync(userId);
+
+            if (!result.IsSuccess)
+                return BadRequest(result.ErrorMessage);
+
+            return NoContent(); 
         }
     }
 }
@@ -882,9 +914,10 @@ using System.Text;
 namespace OrderingSystem.Application.DTOs
 {
         public record LoginRequest(string FullName, string Password);
-        public record LoginResponse(string Token, string FullName, enRoleType Role);
+        public record LoginResponse(string Token, string refreshToken, DateTime AccessTokenExpiry, string FullName, enRoleType Role);
         public record CreateUserRequest(string FullName, string Password, enRoleType Role);
         public record UserResponse(int UserId, string FullName, enRoleType Role);
+        public record RefreshTokenRequest(string AccessToken, string RefreshToken);
 }
 
 
@@ -1085,7 +1118,9 @@ namespace OrderingSystem.Application.Interfaces.Authentication
     public interface IAuthCommandService
     {
         Task<Result<LoginResponse>> LoginAsync(LoginRequest request);
+        Task<Result> LogoutAsync(int userId);
         Task<Result<UserResponse>> CreateUserAsync(CreateUserRequest request);
+        Task<Result<LoginResponse>> RefreshTokenAsync(RefreshTokenRequest request);
     }
 }
 
@@ -1093,16 +1128,19 @@ namespace OrderingSystem.Application.Interfaces.Authentication
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\Authentication\IJwtProvider.cs
 ----------------------------------------
-﻿using System;
+﻿using OrderingSystem.Domain.Entities;
+using System;
 using System.Collections.Generic;
+using System.Security.Claims;
 using System.Text;
-using OrderingSystem.Domain.Entities;
 
 namespace OrderingSystem.Application.Interfaces.Authentication
 {
     public interface IJwtProvider
     {
-        string GenerateToken(User user);
+        (string Token, DateTime ExpiryTime) GenerateToken(User user);
+        string GenerateRefreshToken();
+        ClaimsPrincipal? GetPrincipalFromExpiredToken(string token);
     }
 }
 
@@ -1117,8 +1155,10 @@ namespace OrderingSystem.Application.Interfaces.Auth
     public interface IUserRepository
     {
         Task<User?> GetUserByFullNameAsync(string fullName);
+        Task<User?> GetUserByIdAsync(int userId); 
         Task<bool> UserExistsAsync(string fullName);
         Task AddUserAsync(User user);
+        Task UpdateUserAsync(User user); 
     }
 }
 
@@ -1619,6 +1659,8 @@ using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 namespace OrderingSystem.Application.Services
 {
@@ -1635,23 +1677,62 @@ namespace OrderingSystem.Application.Services
 
         public async Task<Result<LoginResponse>> LoginAsync(LoginRequest request)
         {
-            // Note: Hashing should be applied to request.Password before querying
             var user = await _userRepository.GetUserByFullNameAsync(request.FullName);
 
-            if (user == null)
+            if (user == null || !BCrypt.Net.BCrypt.EnhancedVerify(request.Password, user.PasswordHash))
             {
-                return Result<LoginResponse>.Failure("Account was not found.", enErrorType.Unauthorized);
+                return Result<LoginResponse>.Failure("Invalid credentials.", enErrorType.Unauthorized);
             }
-            
 
-            if (!BCrypt.Net.BCrypt.EnhancedVerify(request.Password, user.PasswordHash)) 
-            { 
-                return Result<LoginResponse>.Failure("Invalid password.", enErrorType.Unauthorized);
+            var (token, expiryTime) = _jwtProvider.GenerateToken(user);
+            var refreshToken = _jwtProvider.GenerateRefreshToken();
+
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            await _userRepository.UpdateUserAsync(user);
+
+            var response = new LoginResponse(token, refreshToken, expiryTime, user.FullName, user.Role);
+            return Result<LoginResponse>.Success(response);
+        }
+
+        public async Task<Result<LoginResponse>> RefreshTokenAsync(RefreshTokenRequest request)
+        {
+            var principal = _jwtProvider.GetPrincipalFromExpiredToken(request.AccessToken);
+
+            if (principal == null)
+                return Result<LoginResponse>.Failure("Invalid access token.", enErrorType.Unauthorized);
+
+            var userIdClaim = principal.FindFirst(ClaimTypes.NameIdentifier) ?? principal.FindFirst(JwtRegisteredClaimNames.Sub);
+            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                return Result<LoginResponse>.Failure("Invalid token claims.", enErrorType.Unauthorized);
+
+            var user = await _userRepository.GetUserByIdAsync(userId);
+
+            if (user == null ||
+                user.RefreshToken != request.RefreshToken ||
+                user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+            {
+                return Result<LoginResponse>.Failure("Invalid or expired refresh token.", enErrorType.Unauthorized);
             }
-            
-            var token = _jwtProvider.GenerateToken(user);
-            var response = new LoginResponse(token, user.FullName, user.Role);
 
+            if (user.AbsoluteRefreshTokenExpiryTime <= DateTime.UtcNow)
+            {
+                // Force them to log in again
+                user.RefreshToken = null;
+                await _userRepository.UpdateUserAsync(user);
+
+                return Result<LoginResponse>.Failure("Session expired. Please log in again.", enErrorType.Unauthorized);
+            }
+
+            // Generate new rotated tokens
+            var (newAccessToken, expiryTime) = _jwtProvider.GenerateToken(user);
+            var newRefreshToken = _jwtProvider.GenerateRefreshToken();
+
+            user.RefreshToken = newRefreshToken;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            await _userRepository.UpdateUserAsync(user);
+
+            var response = new LoginResponse(newAccessToken, newRefreshToken, expiryTime, user.FullName, user.Role);
             return Result<LoginResponse>.Success(response);
         }
 
@@ -1673,6 +1754,25 @@ namespace OrderingSystem.Application.Services
 
             var response = new UserResponse(newUser.UserId, newUser.FullName, newUser.Role);
             return Result<UserResponse>.Success(response);
+        }
+
+        public async Task<Result> LogoutAsync(int userId)
+        {
+            var user = await _userRepository.GetUserByIdAsync(userId);
+
+            if (user == null)
+            {
+                return Result.Failure("User not found.", enErrorType.NotFound);
+            }
+
+            // Revoke the tokens
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = null;
+            user.AbsoluteRefreshTokenExpiryTime = null;
+
+            await _userRepository.UpdateUserAsync(user);
+
+            return Result.Success();
         }
     }
 }
@@ -1805,6 +1905,7 @@ using OrderingSystem.Domain.Entities;
 using System;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace OrderingSystem.Infrastructure.Authentication
@@ -1818,7 +1919,7 @@ namespace OrderingSystem.Infrastructure.Authentication
             _config = config;
         }
 
-        public string GenerateToken(User user)
+        public (string Token, DateTime ExpiryTime) GenerateToken(User user)
         {
             var jwtSettings = _config.GetSection("JwtSettings");
             var secretKey = jwtSettings["SecretKey"]!;
@@ -1832,15 +1933,55 @@ namespace OrderingSystem.Infrastructure.Authentication
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
             var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
+            var expiryTime = DateTime.UtcNow.AddMinutes(15);
+
             var token = new JwtSecurityToken(
                 issuer: jwtSettings["Issuer"],
                 audience: jwtSettings["Audience"],
                 claims: claims,
-                expires: DateTime.UtcNow.AddHours(12),
+                expires: expiryTime,
                 signingCredentials: creds
             );
 
-            return new JwtSecurityTokenHandler().WriteToken(token);
+            var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
+
+            return (tokenString, expiryTime);
+        }
+
+        public string GenerateRefreshToken()
+        {
+            var randomNumber = new byte[32];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(randomNumber);
+            return Convert.ToBase64String(randomNumber);
+        }
+
+        public ClaimsPrincipal? GetPrincipalFromExpiredToken(string token)
+        {
+            var jwtSettings = _config.GetSection("JwtSettings");
+            var secretKey = jwtSettings["SecretKey"]!;
+
+            var tokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateAudience = true,
+                ValidateIssuer = true,
+                ValidIssuer = jwtSettings["Issuer"],
+                ValidAudience = jwtSettings["Audience"],
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
+                ValidateLifetime = false // Explicitly ignore expiry for extraction
+            };
+
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out SecurityToken securityToken);
+
+            if (securityToken is not JwtSecurityToken jwtSecurityToken ||
+                !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
+            {
+                throw new SecurityTokenException("Invalid token format.");
+            }
+
+            return principal;
         }
     }
 }
@@ -2515,7 +2656,10 @@ namespace OrderingSystem.Domain.Entities
         public int UserId { get; set; }
         public string FullName { get; set; } = string.Empty;
         public string PasswordHash { get; set; } = string.Empty;
-        public enRoleType Role { get; set; } 
+        public enRoleType Role { get; set; }
+        public string? RefreshToken { get; set; }
+        public DateTime? RefreshTokenExpiryTime { get; set; }
+        public DateTime? AbsoluteRefreshTokenExpiryTime { get; set; } 
     }
 }
 
@@ -2700,6 +2844,13 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.FullName).IsRequired().HasMaxLength(255);
                 entity.Property(e => e.PasswordHash).IsRequired();
                 entity.Property(e => e.Role).IsRequired();
+                entity.Property(e => e.RefreshToken)
+                      .HasMaxLength(255)
+                      .IsRequired(false);
+                entity.Property(e => e.RefreshTokenExpiryTime)
+                      .IsRequired(false);
+                entity.Property(e => e.AbsoluteRefreshTokenExpiryTime)
+                      .IsRequired(false);
             });
 
             // 2. Tables
@@ -4355,6 +4506,440 @@ namespace OrderingSystem.Infrastructure.Migrations
 
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260705155235_AddRefreshTokenForAuthentication.cs
+----------------------------------------
+﻿using System;
+using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    /// <inheritdoc />
+    public partial class AddRefreshTokenForAuthentication : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.AddColumn<DateTime>(
+                name: "AbsoluteRefreshTokenExpiryTime",
+                table: "Users",
+                type: "timestamp with time zone",
+                nullable: true);
+
+            migrationBuilder.AddColumn<string>(
+                name: "RefreshToken",
+                table: "Users",
+                type: "character varying(255)",
+                maxLength: 255,
+                nullable: true);
+
+            migrationBuilder.AddColumn<DateTime>(
+                name: "RefreshTokenExpiryTime",
+                table: "Users",
+                type: "timestamp with time zone",
+                nullable: true);
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropColumn(
+                name: "AbsoluteRefreshTokenExpiryTime",
+                table: "Users");
+
+            migrationBuilder.DropColumn(
+                name: "RefreshToken",
+                table: "Users");
+
+            migrationBuilder.DropColumn(
+                name: "RefreshTokenExpiryTime",
+                table: "Users");
+        }
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260705155235_AddRefreshTokenForAuthentication.Designer.cs
+----------------------------------------
+﻿// <auto-generated />
+using System;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+using OrderingSystem.Infrastructure.Data;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    [DbContext(typeof(OrderingSystemDbContext))]
+    [Migration("20260705155235_AddRefreshTokenForAuthentication")]
+    partial class AddRefreshTokenForAuthentication
+    {
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+
+            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Property<int>("CategoryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("CategoryId"));
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.HasKey("CategoryId");
+
+                    b.ToTable("Categories");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Property<Guid>("DeviceSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsApproved")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("SessionDevices");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Property<int>("MenuItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("MenuItemId"));
+
+                    b.Property<int>("CategoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ImageUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<decimal>("Price")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("MenuItemId");
+
+                    b.HasIndex("CategoryId");
+
+                    b.ToTable("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Property<int>("OrderId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeviceSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("OrderStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("OrderId");
+
+                    b.HasIndex("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.Property<int>("OrderItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderItemId"));
+
+                    b.Property<int>("MenuItemId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("OrderId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("OrderItemId");
+
+                    b.HasIndex("MenuItemId");
+
+                    b.HasIndex("OrderId");
+
+                    b.ToTable("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Property<int>("TableId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TableId"));
+
+                    b.Property<int>("FloorNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("QrCode")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableNumber")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TableId");
+
+                    b.ToTable("Tables");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Property<Guid>("TableSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TableSessionId");
+
+                    b.HasIndex("TableId");
+
+                    b.ToTable("TableSessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
+                {
+                    b.Property<int>("UserId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("UserId"));
+
+                    b.Property<DateTime?>("AbsoluteRefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RefreshToken")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<DateTime?>("RefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "TableSession")
+                        .WithMany("Devices")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TableSession");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Category", "Category")
+                        .WithMany("MenuItems")
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.DeviceSession", "Device")
+                        .WithMany("Orders")
+                        .HasForeignKey("DeviceSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "Session")
+                        .WithMany("Orders")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.MenuItem", "MenuItem")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("MenuItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.Order", "Order")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("MenuItem");
+
+                    b.Navigation("Order");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Table", "Table")
+                        .WithMany("Sessions")
+                        .HasForeignKey("TableId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Table");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Navigation("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Navigation("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Navigation("Sessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Navigation("Devices");
+
+                    b.Navigation("Orders");
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\OrderingSystemDbContextModelSnapshot.cs
 ----------------------------------------
 ﻿// <auto-generated />
@@ -4404,7 +4989,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("CategoryId");
 
-                    b.ToTable("Categories", (string)null);
+                    b.ToTable("Categories");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
@@ -4426,7 +5011,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("TableSessionId");
 
-                    b.ToTable("SessionDevices", (string)null);
+                    b.ToTable("SessionDevices");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
@@ -4469,7 +5054,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("CategoryId");
 
-                    b.ToTable("MenuItems", (string)null);
+                    b.ToTable("MenuItems");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
@@ -4502,7 +5087,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("TableSessionId");
 
-                    b.ToTable("Orders", (string)null);
+                    b.ToTable("Orders");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
@@ -4532,7 +5117,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("OrderId");
 
-                    b.ToTable("OrderItems", (string)null);
+                    b.ToTable("OrderItems");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
@@ -4559,7 +5144,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TableId");
 
-                    b.ToTable("Tables", (string)null);
+                    b.ToTable("Tables");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
@@ -4584,7 +5169,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("TableId");
 
-                    b.ToTable("TableSessions", (string)null);
+                    b.ToTable("TableSessions");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
@@ -4595,6 +5180,9 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("UserId"));
 
+                    b.Property<DateTime?>("AbsoluteRefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("FullName")
                         .IsRequired()
                         .HasMaxLength(255)
@@ -4604,12 +5192,19 @@ namespace OrderingSystem.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("RefreshToken")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<DateTime?>("RefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<int>("Role")
                         .HasColumnType("integer");
 
                     b.HasKey("UserId");
 
-                    b.ToTable("Users", (string)null);
+                    b.ToTable("Users");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
@@ -5488,9 +6083,21 @@ namespace OrderingSystem.Infrastructure.Repositories
             return await _context.Users.AnyAsync(u => u.FullName == fullName);
         }
 
+        public async Task<User?> GetUserByIdAsync(int userId)
+        {
+            // Keeping tracking ON here so we can easily call UpdateUserAsync later
+            return await _context.Users.FirstOrDefaultAsync(u => u.UserId == userId);
+        }
+
         public async Task AddUserAsync(User user)
         {
             _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task UpdateUserAsync(User user)
+        {
+            _context.Users.Update(user);
             await _context.SaveChangesAsync();
         }
     }

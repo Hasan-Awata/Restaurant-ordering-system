@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Infrastructure.ExternalServices.Notifications;
+using OrderingSystem.Domain.Enums;
 
 namespace OrderingSystem.Infrastructure.Notifications
 {
@@ -38,6 +39,27 @@ namespace OrderingSystem.Infrastructure.Notifications
             // The Host connects to a group named after their DeviceSessionId while waiting
             await _hubContext.Clients.Group(hostDeviceSessionId.ToString())
                 .ReceiveCashierApprovalNotification(hostDeviceSessionId, "Your table has been approved by the cashier and is now active.");
+        }
+
+        public async Task NotifyCashierOfNewOrderAsync(int orderId, Guid tableSessionId)
+        {
+            // Target the cashiers group 
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveNewOrderNotification(orderId, tableSessionId, $"New order #{orderId} received.");
+        }
+
+        public async Task NotifyCustomerOfOrderStatusAsync(Guid deviceSessionId, int orderId, enOrderStatus status)
+        {
+            // Target the specific device session 
+            await _hubContext.Clients.Group(deviceSessionId.ToString())
+                .ReceiveOrderStatusUpdate(orderId, status, $"Your order #{orderId} is now {status}.");
+        }
+
+        public async Task NotifyCashiersOfCustomerCancellationAsync(int orderId, Guid tableSessionId)
+        {
+            // Alert the cashiers that an order was dropped
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveOrderStatusUpdate(orderId, enOrderStatus.Cancelled, $"Order #{orderId} was cancelled by the customer.");
         }
     }
 }

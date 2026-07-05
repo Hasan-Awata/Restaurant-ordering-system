@@ -8,6 +8,7 @@ using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem; 
 using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
@@ -96,6 +97,8 @@ builder.Services.AddScoped<ICategoryQuery, CategoryQuery>();
 builder.Services.AddScoped<IAuthCommandService, AuthCommandService>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IJwtProvider, JwtProvider>();
+builder.Services.AddScoped<IOrderRepository, OrderRepository>();
+builder.Services.AddScoped<IOrderCommandService, OrderCommandService>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
