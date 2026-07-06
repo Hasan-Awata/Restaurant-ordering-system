@@ -101,6 +101,7 @@ using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem; 
 using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
@@ -189,6 +190,8 @@ builder.Services.AddScoped<ICategoryQuery, CategoryQuery>();
 builder.Services.AddScoped<IAuthCommandService, AuthCommandService>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IJwtProvider, JwtProvider>();
+builder.Services.AddScoped<IOrderRepository, OrderRepository>();
+builder.Services.AddScoped<IOrderCommandService, OrderCommandService>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -619,6 +622,97 @@ namespace OrderingSystem.WebApi.Controllers
 }
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\OrdersController.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/orders")]
+    public class OrdersController : ControllerBase
+    {
+        private readonly IOrderCommandService _orderCommandService;
+
+        public OrdersController(IOrderCommandService orderCommandService)
+        {
+            _orderCommandService = orderCommandService;
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
+        {
+            var result = await _orderCommandService.AddOrderAsync(request);
+            if (!result.IsSuccess)
+            {
+                return result.ErrorType == enErrorType.Validation
+                    ? BadRequest(result.ErrorMessage)
+                    : StatusCode(500, result.ErrorMessage);
+            }
+
+            return CreatedAtAction(nameof(CreateOrder), new { id = result.Value!.OrderId }, result.Value);
+        }
+
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPut("{id}/approve")]
+        public async Task<IActionResult> ApproveOrder(int id)
+        {
+            var result = await _orderCommandService.ApproveOrderAsync(id);
+            if (!result.IsSuccess)
+            {
+                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
+                if (result.ErrorType == enErrorType.Conflict) return Conflict(result.ErrorMessage);
+                return StatusCode(500, result.ErrorMessage);
+            }
+            return Ok(new { Message = "Order approved successfully." });
+        }
+
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpDelete("{id}/cancel")]
+        public async Task<IActionResult> CancelOrder(int id)
+        {
+            var result = await _orderCommandService.CancelOrderAsync(id);
+            if (!result.IsSuccess)
+            {
+                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
+                return StatusCode(500, result.ErrorMessage);
+            }
+            return NoContent();
+        }
+
+        [HttpDelete("{id}/customer-cancel")]
+        public async Task<IActionResult> CustomerCancelOrder(int id)
+        {
+            // Extract the secure session ID from the cookie
+            if (!Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) ||
+                !Guid.TryParse(cookieValue, out var deviceSessionId))
+            {
+                return Unauthorized("Invalid or missing device session.");
+            }
+
+            var result = await _orderCommandService.CancelOrderByCustomerAsync(id, deviceSessionId);
+
+            if (!result.IsSuccess)
+            {
+                return result.ErrorType switch
+                {
+                    enErrorType.NotFound => NotFound(result.ErrorMessage),
+                    enErrorType.Unauthorized => Unauthorized(result.ErrorMessage),
+                    enErrorType.Conflict => Conflict(result.ErrorMessage), // Returns 409 if order is already preparing
+                    _ => StatusCode(500, result.ErrorMessage)
+                };
+            }
+
+            return NoContent();
+        }
+    }
+}
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TableController.cs
 ----------------------------------------
 ﻿using Microsoft.AspNetCore.Mvc;
@@ -1011,6 +1105,23 @@ namespace OrderingSystem.Application.DTOs
 
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\OrderRecords.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Application.DTOs
+{
+    public class OrderRecords
+    {
+        public record CreateOrderRequest(Guid TableSessionId, Guid DeviceSessionId, List<OrderItemRequest> Items);
+        public record OrderItemRequest(int MenuItemId, int Quantity);
+
+        public record OrderResponse(int OrderId, decimal TotalAmount, enOrderStatus OrderStatus, DateTime CreatedAt, List<OrderItemResponse> Items);
+        public record OrderItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice);
+    }
+}
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\SessionRecords.cs
 ----------------------------------------
 ﻿using OrderingSystem.Domain.Entities;
@@ -1312,6 +1423,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using OrderingSystem.Domain.Enums;
 
 namespace OrderingSystem.Application.Interfaces.Notifications
 {
@@ -1321,6 +1433,9 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyHostOfGuestJoinAsync(Guid tableSessionId, Guid guestDeviceSessionId);
         public Task NotifyGuestOfApprovalAsync(Guid guestDeviceSessionId);
         public Task NotifyHostOfTableActivationAsync(Guid hostDeviceSessionId);
+        public Task NotifyCashierOfNewOrderAsync(int orderId, Guid tableSessionId);
+        public Task NotifyCustomerOfOrderStatusAsync(Guid deviceSessionId, int orderId, enOrderStatus status);
+        public Task NotifyCashiersOfCustomerCancellationAsync(int orderId, Guid tableSessionId);
     }
 }
 
@@ -1331,6 +1446,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using OrderingSystem.Domain.Enums;
 
 namespace OrderingSystem.Application.Interfaces.Notifications
 {
@@ -1340,9 +1456,44 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveJoinRequest(Guid deviceSessionId, string message);
         public Task ReceiveHostApprovalNotification(string message);
         public Task ReceiveCashierApprovalNotification(Guid hostDeviceSessionId, string message);
+        public Task ReceiveNewOrderNotification(int orderId, Guid tableSessionId, string message);
+        public Task ReceiveOrderStatusUpdate(int orderId, enOrderStatus status, string message);
     }
 }
 
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\OrdersInterfaces\IOrderCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Common;
+
+namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
+{
+    public interface IOrderCommandService
+    {
+        Task<Result<OrderRecords.OrderResponse>> AddOrderAsync(OrderRecords.CreateOrderRequest request);
+        Task<Result<bool>> ApproveOrderAsync(int orderId);
+        Task<Result<bool>> CancelOrderAsync(int orderId);
+        Task<Result<bool>> CancelOrderByCustomerAsync(int orderId, Guid deviceSessionId);
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\OrdersInterfaces\IOrderRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+
+namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
+{
+    public interface IOrderRepository
+    {
+        Task AddOrderAsync(Order order);
+        Task<Order?> GetOrderByIdAsync(int orderId);
+        Task UpdateOrderAsync(Order order);
+        Task DeleteOrderAsync(Order order);
+    }
+}
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\SessionsInterfaces\IDeviceSessionCommand.cs
@@ -2128,6 +2279,140 @@ namespace OrderingSystem.Application.Services
 
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\OrderCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.MenueItem;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Application.Services
+{
+    public class OrderCommandService : IOrderCommandService
+    {
+        private readonly IOrderRepository _orderRepository;
+        private readonly IMenueItemRepository _menuItemRepository;
+        private readonly IRealTimeNotifier _notifier;
+
+        public OrderCommandService(
+            IOrderRepository orderRepository,
+            IMenueItemRepository menuItemRepository,
+            IRealTimeNotifier notifier)
+        {
+            _orderRepository = orderRepository;
+            _menuItemRepository = menuItemRepository;
+            _notifier = notifier;
+        }
+
+        public async Task<Result<OrderRecords.OrderResponse>> AddOrderAsync(OrderRecords.CreateOrderRequest request)
+        {
+            if (!request.Items.Any())
+                return Result<OrderRecords.OrderResponse>.Failure("Order must contain at least one item.", enErrorType.Validation);
+
+            decimal totalAmount = 0;
+            var orderItems = new List<OrderItem>();
+
+            foreach (var itemReq in request.Items)
+            {
+                var menuItem = await _menuItemRepository.GetMenuItemByIdAsync(itemReq.MenuItemId);
+                if (menuItem == null || !menuItem.IsAvailable)
+                    return Result<OrderRecords.OrderResponse>.Failure($"Menu item {itemReq.MenuItemId} is unavailable.", enErrorType.Validation);
+
+                totalAmount += menuItem.Price * itemReq.Quantity;
+
+                orderItems.Add(new OrderItem
+                {
+                    MenuItemId = menuItem.MenuItemId,
+                    Quantity = itemReq.Quantity,
+                    UnitPrice = menuItem.Price // Securely sourced from DB
+                });
+            }
+
+            var order = new Order
+            {
+                TableSessionId = request.TableSessionId,
+                DeviceSessionId = request.DeviceSessionId,
+                TotalAmount = totalAmount,
+                OrderStatus = enOrderStatus.Pending,
+                CreatedAt = DateTime.UtcNow,
+                OrderItems = orderItems
+            };
+
+            await _orderRepository.AddOrderAsync(order);
+
+            // Notify Cashiers
+            await _notifier.NotifyCashierOfNewOrderAsync(order.OrderId, order.TableSessionId);
+
+            // Construct Response
+            var responseItems = order.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
+                oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.Quantity, oi.UnitPrice)).ToList();
+
+            var response = new OrderRecords.OrderResponse(order.OrderId, order.TotalAmount, order.OrderStatus, order.CreatedAt, responseItems);
+            return Result<OrderRecords.OrderResponse>.Success(response);
+        }
+
+        public async Task<Result<bool>> ApproveOrderAsync(int orderId)
+        {
+            var order = await _orderRepository.GetOrderByIdAsync(orderId);
+            if (order == null)
+                return Result<bool>.Failure("Order not found.", enErrorType.NotFound);
+
+            if (order.OrderStatus != enOrderStatus.Pending)
+                return Result<bool>.Failure("Only pending orders can be approved.", enErrorType.Conflict);
+
+            order.OrderStatus = enOrderStatus.Preparing;
+            await _orderRepository.UpdateOrderAsync(order);
+
+            // Notify Customer
+            await _notifier.NotifyCustomerOfOrderStatusAsync(order.DeviceSessionId, order.OrderId, order.OrderStatus);
+
+            return Result<bool>.Success(true);
+        }
+
+        public async Task<Result<bool>> CancelOrderAsync(int orderId)
+        {
+            var order = await _orderRepository.GetOrderByIdAsync(orderId);
+            if (order == null)
+                return Result<bool>.Failure("Order not found.", enErrorType.NotFound);
+
+            // Notify Customer before deletion so we still have the DeviceSessionId
+            await _notifier.NotifyCustomerOfOrderStatusAsync(order.DeviceSessionId, order.OrderId, enOrderStatus.Cancelled);
+
+            // Per requirement: Order is immediately deleted from the database
+            await _orderRepository.DeleteOrderAsync(order);
+
+            return Result<bool>.Success(true);
+        }
+
+        public async Task<Result<bool>> CancelOrderByCustomerAsync(int orderId, Guid deviceSessionId)
+        {
+            var order = await _orderRepository.GetOrderByIdAsync(orderId);
+            if (order == null)
+                return Result<bool>.Failure("Order not found.", enErrorType.NotFound);
+
+            // 1. Security Guard: Does this order belong to the device trying to cancel it?
+            if (order.DeviceSessionId != deviceSessionId)
+                return Result<bool>.Failure("You are not authorized to cancel this order.", enErrorType.Unauthorized);
+
+            // 2. Business Rule Guard: Has the kitchen already started?
+            if (order.OrderStatus != enOrderStatus.Pending)
+                return Result<bool>.Failure("Your order is already being prepared. Please speak to the cashier to cancel.", enErrorType.Conflict);
+
+            // 3. Execution
+            await _orderRepository.DeleteOrderAsync(order);
+
+            // 4. Notification
+            await _notifier.NotifyCashiersOfCustomerCancellationAsync(order.OrderId, order.TableSessionId);
+
+            return Result<bool>.Success(true);
+        }
+    }
+}
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\SessionCommandService.cs
 ----------------------------------------
 ﻿using OrderingSystem.Application.DTOs;
@@ -2553,7 +2838,7 @@ namespace OrderingSystem.Domain.Entities
         public Guid TableSessionId { get; set; }
         public Guid DeviceSessionId { get; set; }
         public decimal TotalAmount { get; set; }
-        public enOrderStatusType OrderStatus { get; set; }
+        public enOrderStatus OrderStatus { get; set; }
         public DateTime CreatedAt { get; set; }
 
         // Navigation
@@ -2704,6 +2989,25 @@ namespace OrderingSystem.Domain.Enums
 
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enOrderStatus.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enOrderStatus
+    {
+        Pending = 1,
+        Preparing = 2,
+        Served = 3,
+        Cancelled = 4
+    }
+}
+
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enRoleType.cs
 ----------------------------------------
 ﻿using System;
@@ -2753,25 +3057,6 @@ namespace OrderingSystem.Domain.Enums
         Available = 1,
         Occupied = 2,
         Billing = 3
-    }
-}
-
-
-
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\OrderStatusType.cs
-----------------------------------------
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace OrderingSystem.Domain.Enums
-{
-    public enum enOrderStatusType
-    {
-        Pending = 1,
-        Preparing = 2,
-        Served = 3,
-        Cancelled = 4
     }
 }
 
@@ -2955,6 +3240,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastru
 ﻿using Microsoft.AspNetCore.SignalR;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Infrastructure.ExternalServices.Notifications;
+using OrderingSystem.Domain.Enums;
 
 namespace OrderingSystem.Infrastructure.Notifications
 {
@@ -2992,6 +3278,27 @@ namespace OrderingSystem.Infrastructure.Notifications
             // The Host connects to a group named after their DeviceSessionId while waiting
             await _hubContext.Clients.Group(hostDeviceSessionId.ToString())
                 .ReceiveCashierApprovalNotification(hostDeviceSessionId, "Your table has been approved by the cashier and is now active.");
+        }
+
+        public async Task NotifyCashierOfNewOrderAsync(int orderId, Guid tableSessionId)
+        {
+            // Target the cashiers group 
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveNewOrderNotification(orderId, tableSessionId, $"New order #{orderId} received.");
+        }
+
+        public async Task NotifyCustomerOfOrderStatusAsync(Guid deviceSessionId, int orderId, enOrderStatus status)
+        {
+            // Target the specific device session 
+            await _hubContext.Clients.Group(deviceSessionId.ToString())
+                .ReceiveOrderStatusUpdate(orderId, status, $"Your order #{orderId} is now {status}.");
+        }
+
+        public async Task NotifyCashiersOfCustomerCancellationAsync(int orderId, Guid tableSessionId)
+        {
+            // Alert the cashiers that an order was dropped
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveOrderStatusUpdate(orderId, enOrderStatus.Cancelled, $"Order #{orderId} was cancelled by the customer.");
         }
     }
 }
@@ -5944,6 +6251,53 @@ namespace OrderingSystem.Infrastructure.Repositories
     }
 }
 
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\OrderRepository.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Repositories
+{
+    public class OrderRepository : IOrderRepository
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public OrderRepository(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task AddOrderAsync(Order order)
+        {
+            _context.Orders.Add(order);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task<Order?> GetOrderByIdAsync(int orderId)
+        {
+            return await _context.Orders
+                .Include(o => o.OrderItems)
+                .ThenInclude(oi => oi.MenuItem) 
+                .FirstOrDefaultAsync(o => o.OrderId == orderId);
+        }
+
+        public async Task UpdateOrderAsync(Order order)
+        {
+            _context.Orders.Update(order);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task DeleteOrderAsync(Order order)
+        {
+            _context.Orders.Remove(order);
+            await _context.SaveChangesAsync();
+        }
+    }
+}
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\TableRepository.cs

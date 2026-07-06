@@ -154,14 +154,18 @@ builder.Services.AddCors(options =>
 
     // 2. Iron-clad policy for Production
     options.AddPolicy("ProductionPolicy", builder =>
-        builder.WithOrigins(
-                "http://127.0.0.1:5500",
-                "http://localhost:3000",
-                "http://localhost:8080"
-               )
-               .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
+            builder.SetIsOriginAllowed(_ => true)
+               .AllowAnyMethod()
+               .AllowAnyHeader()
                .AllowCredentials());
+            //builder.WithOrigins(
+            //    "http://127.0.0.1:5500",
+            //    "http://localhost:3000",
+            //    "http://localhost:8080"
+            //   )
+            //   .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+            //   .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
+            //   .AllowCredentials());
 });
 
 // ─────────────────────────────────────────────────────────────────────────
