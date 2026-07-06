@@ -2,14 +2,14 @@
 using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Authentication;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
+using OrderingSystem.WebApi.Controllers.Base;
+using System.Threading.Tasks;
 
 namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/auth")]
-    public class AuthController : ControllerBase
+    public class AuthController : BaseController
     {
         private readonly IAuthCommandService _authCommandService;
 
@@ -22,8 +22,7 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
             var result = await _authCommandService.LoginAsync(request);
-            if (!result.IsSuccess) return Unauthorized(result.ErrorMessage);
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [Authorize(Roles = "Admin")]
@@ -31,39 +30,29 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
         {
             var result = await _authCommandService.CreateUserAsync(request);
-            if (!result.IsSuccess) return BadRequest(result.ErrorMessage);
-            return Ok(result.Value);
+
+            return HandleResult(result);
         }
 
         [HttpPost("refresh-token")]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
         {
             var result = await _authCommandService.RefreshTokenAsync(request);
-
-            if (!result.IsSuccess)
-                return Unauthorized(result.ErrorMessage);
-
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [Authorize]
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
         {
-            // Extract the UserId from the JWT token claims
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier) ?? User.FindFirst(JwtRegisteredClaimNames.Sub);
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+            // Extract the UserId cleanly using the BaseController property
+            if (!CurrentUserId.HasValue)
             {
-                return Unauthorized("Invalid token claims.");
+                return Unauthorized(new { error = "Invalid token claims." });
             }
 
-            var result = await _authCommandService.LogoutAsync(userId);
-
-            if (!result.IsSuccess)
-                return BadRequest(result.ErrorMessage);
-
-            return NoContent(); 
+            var result = await _authCommandService.LogoutAsync(CurrentUserId.Value);
+            return HandleResult(result);
         }
     }
 }

@@ -32,7 +32,8 @@ namespace OrderingSystem.WebApi.Controllers
             {
                 return result.ErrorType == enErrorType.Validation ? BadRequest(result.ErrorMessage) : StatusCode(500, result.ErrorMessage);
             }
-            return CreatedAtAction(nameof(GetQrCode), new { tableId = result.Value!.TableId }, result.Value);
+
+            return CreatedAtAction(nameof(GetTableById), new { tableId = result.Value!.TableId }, result.Value);
         }
 
         [HttpPut]
@@ -47,7 +48,7 @@ namespace OrderingSystem.WebApi.Controllers
             }
             return Ok(result.Value);
         }
-
+        
         [HttpDelete("{tableId}")]
         public async Task<IActionResult> DeleteTable(int tableId)
         {
