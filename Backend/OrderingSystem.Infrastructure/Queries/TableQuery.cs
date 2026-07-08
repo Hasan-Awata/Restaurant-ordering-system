@@ -113,7 +113,7 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             var query = _context.Tables
                 .AsNoTracking()
-                .Where(t => t.Sessions.Any(s => s.Status == enSessionStatus.PendingActivation));
+                .Where(t => t.Status == enTableStatus.Occupied && t.Sessions.Any(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null));
 
             var totalRecords = await query.CountAsync();
 

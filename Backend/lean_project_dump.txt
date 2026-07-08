@@ -2460,6 +2460,7 @@ namespace OrderingSystem.Application.Services
             }
 
             Guid newHostDeviceId = Guid.CreateVersion7();
+            table.Status = enTableStatus.Occupied;
             return await ActivateTableSessionAsync(table.TableId, newHostDeviceId);
         }
 
@@ -5991,7 +5992,7 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             var query = _context.Tables
                 .AsNoTracking()
-                .Where(t => t.Status == enTableStatus.Occupied); 
+                .Where(t => t.Sessions.Any(s => s.Status == enSessionStatus.PendingActivation));
 
             var totalRecords = await query.CountAsync();
 

@@ -3,7 +3,6 @@ using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Domain.Common;
-using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
