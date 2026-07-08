@@ -92,9 +92,9 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpGet("floor/{floorNumber}")]
-        public async Task<IActionResult> GetAllTablesByFloor(int floorNumber)
+        public async Task<IActionResult> GetAllTablesByFloor([FromQuery] PageDTO page, int floorNumber)
         {
-            var result = await _tableQueryService.GetAllTablesByFloorAsync(floorNumber);
+            var result = await _tableQueryService.GetAllTablesByFloorAsync(page, floorNumber);
             return Ok(result);
         }
 
@@ -106,7 +106,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpGet("status/{tableStatus}")]
-        public async Task<IActionResult> GetAllTablesByStatus(enTableStatus tableStatus, [FromQuery] PageDTO page)
+        public async Task<IActionResult> GetAllTablesByStatus([FromQuery] PageDTO page, enTableStatus tableStatus)
         {
             var result = await _tableQueryService.GetAllTablesByStatusAsync(page, tableStatus);
             return Ok(result);
