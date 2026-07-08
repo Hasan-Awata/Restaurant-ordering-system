@@ -247,14 +247,18 @@ builder.Services.AddCors(options =>
 
     // 2. Iron-clad policy for Production
     options.AddPolicy("ProductionPolicy", builder =>
-        builder.WithOrigins(
-                "http://127.0.0.1:5500",
-                "http://localhost:3000",
-                "http://localhost:8080"
-               )
-               .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
+            builder.SetIsOriginAllowed(_ => true)
+               .AllowAnyMethod()
+               .AllowAnyHeader()
                .AllowCredentials());
+            //builder.WithOrigins(
+            //    "http://127.0.0.1:5500",
+            //    "http://localhost:3000",
+            //    "http://localhost:8080"
+            //   )
+            //   .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+            //   .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
+            //   .AllowCredentials());
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -309,14 +313,14 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Authentication;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
+using OrderingSystem.WebApi.Controllers.Base;
+using System.Threading.Tasks;
 
 namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/auth")]
-    public class AuthController : ControllerBase
+    public class AuthController : BaseController
     {
         private readonly IAuthCommandService _authCommandService;
 
@@ -329,8 +333,7 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
             var result = await _authCommandService.LoginAsync(request);
-            if (!result.IsSuccess) return Unauthorized(result.ErrorMessage);
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [Authorize(Roles = "Admin")]
@@ -338,39 +341,123 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
         {
             var result = await _authCommandService.CreateUserAsync(request);
-            if (!result.IsSuccess) return BadRequest(result.ErrorMessage);
-            return Ok(result.Value);
+
+            return HandleResult(result);
         }
 
         [HttpPost("refresh-token")]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
         {
             var result = await _authCommandService.RefreshTokenAsync(request);
-
-            if (!result.IsSuccess)
-                return Unauthorized(result.ErrorMessage);
-
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [Authorize]
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
         {
-            // Extract the UserId from the JWT token claims
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier) ?? User.FindFirst(JwtRegisteredClaimNames.Sub);
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+            // Extract the UserId cleanly using the BaseController property
+            if (!CurrentUserId.HasValue)
             {
-                return Unauthorized("Invalid token claims.");
+                return Unauthorized(new { error = "Invalid token claims." });
             }
 
-            var result = await _authCommandService.LogoutAsync(userId);
+            var result = await _authCommandService.LogoutAsync(CurrentUserId.Value);
+            return HandleResult(result);
+        }
+    }
+}
 
-            if (!result.IsSuccess)
-                return BadRequest(result.ErrorMessage);
 
-            return NoContent(); 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\BaseController.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Mvc;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Domain.Enums;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
+
+namespace OrderingSystem.WebApi.Controllers.Base
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public abstract class BaseController : ControllerBase
+    {
+        // ── Property: Secure User Extraction ──────────────────────────────
+        protected int? CurrentUserId
+        {
+            get
+            {
+                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier) ??
+                                  User.FindFirst(JwtRegisteredClaimNames.Sub);
+
+                if (userIdClaim != null && int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return userId;
+                }
+                return null;
+            }
+        }
+
+        // ── Property: Secure Device Session Extraction ────────────────────
+        protected Guid? CurrentDeviceSessionId
+        {
+            get
+            {
+                if (Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) &&
+                    Guid.TryParse(cookieValue, out var deviceSessionId))
+                {
+                    return deviceSessionId;
+                }
+                return null;
+            }
+        }
+
+        // ── Method: Standard Result Mapping (200 OK / 204 No Content) ─────
+        protected IActionResult HandleResult<T>(Result<T> result)
+        {
+            if (result.IsSuccess)
+            {
+                return result.Value == null ? NoContent() : Ok(result.Value);
+            }
+
+            return MapError(result.ErrorType, result.ErrorMessage);
+        }
+
+        protected IActionResult HandleResult(Result result)
+        {
+            if (result.IsSuccess)
+            {
+                return NoContent();
+            }
+
+            return MapError(result.ErrorType, result.ErrorMessage);
+        }
+
+        // ── Method: Created Result Mapping (201 CreatedAtAction) ──────────
+        protected IActionResult HandleCreatedResult<T>(Result<T> result, string actionName, object routeValues)
+        {
+            if (result.IsSuccess)
+            {
+                return CreatedAtAction(actionName, routeValues, result.Value);
+            }
+
+            return MapError(result.ErrorType, result.ErrorMessage);
+        }
+
+        // ── Helper: Unified Error Mapping ─────────────────────────────────
+        private IActionResult MapError(enErrorType errorType, string? errorMessage)
+        {
+            return errorType switch
+            {
+                enErrorType.Validation => BadRequest(new { error = errorMessage }),
+                enErrorType.NotFound => NotFound(new { error = errorMessage }),
+                enErrorType.Conflict => Conflict(new { error = errorMessage }),
+                enErrorType.Unauthorized => Unauthorized(new { error = errorMessage }),
+                enErrorType.BalanceViolation => UnprocessableEntity(new { error = errorMessage }),
+                enErrorType.Failure => StatusCode(StatusCodes.Status500InternalServerError, new { error = errorMessage }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError, new { error = "An unexpected error occurred." })
+            };
         }
     }
 }
@@ -382,14 +469,14 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.Category;
-using OrderingSystem.Domain.Enums;
+using OrderingSystem.WebApi.Controllers.Base;
 using System.Threading.Tasks;
 
 namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/categories")]
-    public class CategoriesController : ControllerBase
+    public class CategoriesController : BaseController
     {
         private readonly ICategoryCommandService _categoryCommandService;
         private readonly ICategoryQuery _categoryQueryService;
@@ -406,84 +493,54 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> AddCategory([FromBody] CategoriesRecords.AddCategoryRequest request)
         {
             var result = await _categoryCommandService.AddCategoryAsync(request);
-            if (!result.IsSuccess)
-            {
-                return result.ErrorType == enErrorType.Validation
-                    ? BadRequest(result.ErrorMessage)
-                    : StatusCode(500, result.ErrorMessage);
-            }
 
-             return CreatedAtAction(nameof(GetCategoryById), new { id = result.Value!.CategoryId }, result.Value);
+            return HandleCreatedResult(
+                result,
+                nameof(GetCategoryById),
+                new { id = result.Value?.CategoryId }
+            );
         }
 
         [HttpPut]
         public async Task<IActionResult> UpdateCategory([FromBody] CategoriesRecords.UpdateCategoryRequest request)
         {
             var result = await _categoryCommandService.UpdateCategoryAsync(request);
-            if (!result.IsSuccess)
-            {
-                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
-                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [HttpDelete]
         public async Task<IActionResult> DeleteCategory([FromBody] CategoriesRecords.DeleteCategoryRequest request)
         {
             var result = await _categoryCommandService.DeleteCategoryAsync(request);
-            if (!result.IsSuccess)
-            {
-                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
-                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return NoContent();
+            return HandleResult(result);
         }
 
         [HttpGet("{id}")]
         public async Task<IActionResult> GetCategoryById(int id)
         {
             var result = await _categoryQueryService.GetCategoryByIdAsync(id);
-            if (!result.IsSuccess)
-            {
-                return result.ErrorType == enErrorType.NotFound ? NotFound(result.ErrorMessage) : StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetCategory(int id)
         {
             var result = await _categoryQueryService.GetCategoryAsync(id);
-            if (!result.IsSuccess)
-            {
-                return result.ErrorType == enErrorType.NotFound ? NotFound(result.ErrorMessage) : StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [HttpGet]
         public async Task<IActionResult> GetAllCategories([FromQuery] PageDTO page)
         {
             var result = await _categoryQueryService.GetAllCategoriesAsync(page);
-            if (!result.IsSuccess)
-            {
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableCategories([FromQuery] PageDTO page)
         {
             var result = await _categoryQueryService.GetAllAvailableCategoriesAsync(page);
-            if (!result.IsSuccess)
-            {
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
     }
 }
@@ -495,14 +552,14 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.MenueItem;
-using OrderingSystem.Domain.Enums;
+using OrderingSystem.WebApi.Controllers.Base;
 using System.Threading.Tasks;
 
 namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/menu-items")]
-    public class MenuItemsController : ControllerBase
+    public class MenuItemsController : BaseController
     {
         private readonly IMenueItemCommandService _menuItemCommandService;
         private readonly IMenueItemQuery _menuItemQueryService;
@@ -515,109 +572,66 @@ namespace OrderingSystem.WebApi.Controllers
             _menuItemQueryService = menuItemQueryService;
         }
 
-       
-
         [HttpPost]
         public async Task<IActionResult> AddMenuItem([FromBody] MenuRecords.AddMenuItemRequest request)
         {
             var result = await _menuItemCommandService.AddMenuItemAsync(request);
-            if (!result.IsSuccess)
-            {
-                return result.ErrorType == enErrorType.Validation
-                    ? BadRequest(result.ErrorMessage)
-                    : StatusCode(500, result.ErrorMessage);
-            }
 
-           
-            return CreatedAtAction(nameof(GetItemById), new { id = result.Value!.MenuItemId }, result.Value);
+            return HandleCreatedResult(
+                result,
+                nameof(GetItemById),
+                new { id = result.Value?.MenuItemId }
+            );
         }
 
         [HttpPut]
         public async Task<IActionResult> UpdateMenuItem([FromBody] MenuRecords.UpdateMenuItemRequest request)
         {
             var result = await _menuItemCommandService.UpdateMenuItemAsync(request);
-            if (!result.IsSuccess)
-            {
-                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
-                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [HttpDelete]
         public async Task<IActionResult> DeleteMenuItem([FromBody] MenuRecords.DeleteMenuItemRequest request)
         {
             var result = await _menuItemCommandService.DeleteMenuItemAsync(request);
-            if (!result.IsSuccess)
-            {
-                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
-                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return NoContent();
+            return HandleResult(result);
         }
-
-       
 
         [HttpGet("{id}")]
         public async Task<IActionResult> GetItemById(int id)
         {
             var result = await _menuItemQueryService.GetItemByIdAsync(id);
-            if (!result.IsSuccess)
-            {
-                return result.ErrorType == enErrorType.NotFound ? NotFound(result.ErrorMessage) : StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
-       
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetMenuItem(int id)
         {
             var result = await _menuItemQueryService.GetMenuItemAsync(id);
-            if (!result.IsSuccess)
-            {
-                return result.ErrorType == enErrorType.NotFound ? NotFound(result.ErrorMessage) : StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [HttpGet]
         public async Task<IActionResult> GetAllMenuItems([FromQuery] PageDTO page)
         {
             var result = await _menuItemQueryService.GetAllMenuItemsAsync(page);
-            if (!result.IsSuccess)
-            {
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [HttpGet("category/{categoryId}")]
         public async Task<IActionResult> GetAllMenuItemsByCategory(int categoryId, [FromQuery] PageDTO page)
         {
             var result = await _menuItemQueryService.GetAllMenuItemsByCategoryAsync(categoryId, page);
-            if (!result.IsSuccess)
-            {
-                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
 
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableMenuItems([FromQuery] PageDTO page)
         {
             var result = await _menuItemQueryService.GetAllAvailableMenuItemsAsync(page);
-            if (!result.IsSuccess)
-            {
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(result.Value);
+            return HandleResult(result);
         }
-
-        
     }
 }
 
@@ -629,12 +643,13 @@ using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Domain.Enums;
+using OrderingSystem.WebApi.Controllers.Base;
 
 namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/orders")]
-    public class OrdersController : ControllerBase
+    public class OrdersController : BaseController
     {
         private readonly IOrderCommandService _orderCommandService;
 
@@ -647,14 +662,12 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
             var result = await _orderCommandService.AddOrderAsync(request);
-            if (!result.IsSuccess)
-            {
-                return result.ErrorType == enErrorType.Validation
-                    ? BadRequest(result.ErrorMessage)
-                    : StatusCode(500, result.ErrorMessage);
-            }
 
-            return CreatedAtAction(nameof(CreateOrder), new { id = result.Value!.OrderId }, result.Value);
+            return HandleCreatedResult(
+                result,
+                nameof(CreateOrder),
+                new { id = result.Value?.OrderId }
+            );
         }
 
         [Authorize(Roles = "Admin,Cashier")]
@@ -662,13 +675,7 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> ApproveOrder(int id)
         {
             var result = await _orderCommandService.ApproveOrderAsync(id);
-            if (!result.IsSuccess)
-            {
-                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
-                if (result.ErrorType == enErrorType.Conflict) return Conflict(result.ErrorMessage);
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return Ok(new { Message = "Order approved successfully." });
+            return HandleResult(result);
         }
 
         [Authorize(Roles = "Admin,Cashier")]
@@ -676,44 +683,25 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> CancelOrder(int id)
         {
             var result = await _orderCommandService.CancelOrderAsync(id);
-            if (!result.IsSuccess)
-            {
-                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
-                return StatusCode(500, result.ErrorMessage);
-            }
-            return NoContent();
+            return HandleResult(result);
         }
 
         [HttpDelete("{id}/customer-cancel")]
         public async Task<IActionResult> CustomerCancelOrder(int id)
         {
-            // Extract the secure session ID from the cookie
-            if (!Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) ||
-                !Guid.TryParse(cookieValue, out var deviceSessionId))
+            if (!CurrentDeviceSessionId.HasValue)
             {
-                return Unauthorized("Invalid or missing device session.");
+                return Unauthorized(new { error = "Invalid or missing device session." });
             }
 
-            var result = await _orderCommandService.CancelOrderByCustomerAsync(id, deviceSessionId);
-
-            if (!result.IsSuccess)
-            {
-                return result.ErrorType switch
-                {
-                    enErrorType.NotFound => NotFound(result.ErrorMessage),
-                    enErrorType.Unauthorized => Unauthorized(result.ErrorMessage),
-                    enErrorType.Conflict => Conflict(result.ErrorMessage), // Returns 409 if order is already preparing
-                    _ => StatusCode(500, result.ErrorMessage)
-                };
-            }
-
-            return NoContent();
+            var result = await _orderCommandService.CancelOrderByCustomerAsync(id, CurrentDeviceSessionId.Value);
+            return HandleResult(result);
         }
     }
 }
 
 
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TableController.cs
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TablesController.cs
 ----------------------------------------
 ﻿using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
@@ -749,7 +737,8 @@ namespace OrderingSystem.WebApi.Controllers
             {
                 return result.ErrorType == enErrorType.Validation ? BadRequest(result.ErrorMessage) : StatusCode(500, result.ErrorMessage);
             }
-            return CreatedAtAction(nameof(GetQrCode), new { tableId = result.Value!.TableId }, result.Value);
+
+            return CreatedAtAction(nameof(GetTableById), new { tableId = result.Value!.TableId }, result.Value);
         }
 
         [HttpPut]
@@ -764,7 +753,7 @@ namespace OrderingSystem.WebApi.Controllers
             }
             return Ok(result.Value);
         }
-
+        
         [HttpDelete("{tableId}")]
         public async Task<IActionResult> DeleteTable(int tableId)
         {
@@ -844,17 +833,20 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.DTOs;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using OrderingSystem.WebApi.Controllers.Base;
+using System;
+using System.Threading.Tasks;
 
 namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/tables/sessions")]
-    public class TableSessionsController : ControllerBase
+    public class TableSessionsController : BaseController
     {
         private readonly ISessionCommandService _sessionCommandService;
         private readonly ITableSessionQuery _sessionQueryService;
 
-        // Explicit dependency routing
         public TableSessionsController(
             ISessionCommandService sessionCommandService,
             ITableSessionQuery sessionQueryService)
@@ -867,19 +859,11 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost("qr")]
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
-            // 1. Extract the secure cookie (if it exists)
-            Guid? secureDeviceId = null;
-            if (Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) &&
-                Guid.TryParse(cookieValue, out var parsedId))
-            {
-                secureDeviceId = parsedId;
-            }
+            // Use the secure cookie value extracted by the BaseController
+            var result = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, CurrentDeviceSessionId);
 
-            // 2. Pass the clean DTO and the secure cookie value as separate parameters
-            var response = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, secureDeviceId);
-
-            // 3. If successful, set/refresh the secure cookie
-            if (response.IsSuccess && response.Value?.DeviceSession != null)
+            // If successful, set/refresh the secure cookie
+            if (result.IsSuccess && result.Value?.DeviceSession != null)
             {
                 var cookieOptions = new CookieOptions
                 {
@@ -891,34 +875,27 @@ namespace OrderingSystem.WebApi.Controllers
 
                 Response.Cookies.Append(
                     "DeviceSessionId",
-                    response.Value.DeviceSession.DeviceSessionId.ToString(),
+                    result.Value.DeviceSession.DeviceSessionId.ToString(),
                     cookieOptions
                 );
             }
 
-            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
-            return Ok(response.Value);
+            return HandleResult(result);
         }
+
         [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
         {
-            var response = await _sessionCommandService.ActivateTableSessionAsync(request);
-
-            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
-
-            return Ok(response.Value);
+            var result = await _sessionCommandService.ActivateTableSessionAsync(request);
+            return HandleResult(result);
         }
 
         [HttpPost("approve")]
         public async Task<IActionResult> ApproveGuest([FromBody] ApproveJoiningSessionRequest request)
         {
-            // The service method for this was still intact in your dump
-            var response = await _sessionCommandService.ApproveJoiningRequestAsync(request);
-
-            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
-
-            return Ok(response.Value);
+            var result = await _sessionCommandService.ApproveJoiningRequestAsync(request);
+            return HandleResult(result);
         }
 
         // 2. READ ENDPOINT (Query Path)
@@ -926,8 +903,9 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {
+            // Keeping standard Ok/NotFound since the Query returns a raw response, not Result<T>
             var response = await _sessionQueryService.GetActiveSessionByTableAsync(tableId);
-            if (response == null) return NotFound($"No active session found for table ID {tableId}.");
+            if (response == null) return NotFound(new { error = $"No active session found for table ID {tableId}." });
 
             return Ok(response);
         }

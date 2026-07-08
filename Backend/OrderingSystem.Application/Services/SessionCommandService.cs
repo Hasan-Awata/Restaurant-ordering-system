@@ -65,6 +65,7 @@ namespace OrderingSystem.Application.Services
             }
 
             Guid newHostDeviceId = Guid.CreateVersion7();
+            table.Status = enTableStatus.Occupied;
             return await ActivateTableSessionAsync(table.TableId, newHostDeviceId);
         }
 
