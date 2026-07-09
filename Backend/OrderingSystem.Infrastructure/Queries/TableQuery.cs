@@ -133,7 +133,7 @@ namespace OrderingSystem.Infrastructure.Queries
                             .Select(s => s.TableSessionId)
                             .FirstOrDefault()
                     ))
-                            .ToListAsync();
+                    .ToListAsync();
 
             return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }

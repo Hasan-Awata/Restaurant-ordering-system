@@ -1,11 +1,13 @@
 ﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Mappers;
-using OrderingSystem.Domain.Enums;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
-using OrderingSystem.Application.Interfaces.Notifications;
-using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Domain.Enums;
 
 namespace OrderingSystem.Application.Services
 {
@@ -13,17 +15,21 @@ namespace OrderingSystem.Application.Services
     {
         private readonly ITableSessionRepository _tableSessionRepository;
         private readonly IDeviceSessionRepository _deviceSessionRepository;
+        private readonly ITableRepository _tableRepository;
+        private readonly IOrderRepository _orderRepository;
         private readonly IRealTimeNotifier _notifier;
 
         public SessionCommandService(
             ITableSessionRepository tableSessionRepository,
             IDeviceSessionRepository deviceSessionRepository,
-            IDeviceSessionQuery deviceSessionQuery,
-            ITableSessionQuery tableSessionQuery,
+            ITableRepository tableRepository,
+            IOrderRepository orderRepository,
             IRealTimeNotifier notifier)
         {
             _tableSessionRepository = tableSessionRepository;
             _deviceSessionRepository = deviceSessionRepository;
+            _tableRepository = tableRepository;
+            _orderRepository = orderRepository;
             _notifier = notifier;
         }
 
@@ -173,9 +179,70 @@ namespace OrderingSystem.Application.Services
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));
         }
 
-        public async Task<Result<SessionResponse>> DeactivateAsync(DeactivateSessionByAdminRequest request)
+        public async Task<Result> DeactivateTableSessionAsync(Guid tableSessionId)
         {
-            return Result<SessionResponse>.Failure("Not Implemented", enErrorType.Failure);
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            // 1. Explicitly delete orders to safely bypass the ON DELETE RESTRICT database constraint
+            if (session.Orders != null && session.Orders.Any())
+            {
+                foreach (var order in session.Orders.ToList())
+                {
+                    await _orderRepository.DeleteOrderAsync(order);
+                }
+            }
+
+            // 2. Hard delete the session (DeviceSessions will cascade automatically!)
+            await _tableSessionRepository.DeleteSessionAsync(session);
+
+            // 3. Reset the Table Status back to Available
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table != null)
+            {
+                table.Status = enTableStatus.Available;
+                await _tableRepository.UpdateTableAsync(table);
+            }
+
+            // Optional: Notify via SignalR that session is dropped
+            return Result.Success();
+        }
+
+        public async Task<Result<SessionResponse>> EndTableSessionAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result<SessionResponse>.Failure("No active table session was found.", enErrorType.NotFound);
+
+            // 1. Soft close the session
+            session.Status = enSessionStatus.Closed;
+            session.ClosedAt = DateTime.UtcNow;
+
+            // 2. Flag all active orders as Served (excluding already cancelled ones)
+            if (session.Orders != null && session.Orders.Any())
+            {
+                foreach (var order in session.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled))
+                {
+                    order.OrderStatus = enOrderStatus.Served;
+                    await _orderRepository.UpdateOrderAsync(order);
+                }
+            }
+
+            // 3. Save the session status
+            await _tableSessionRepository.UpdateSessionAsync(session);
+
+            // 4. Reset the Table Status back to Available for the next customer
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table != null)
+            {
+                table.Status = enTableStatus.Available;
+                await _tableRepository.UpdateTableAsync(table);
+            }
+
+            // Optional: Notify clients via SignalR to show the "Thank You" or "Receipt" screen
+
+            return Result<SessionResponse>.Success(session.ToResponse(null));
         }
     }
 }

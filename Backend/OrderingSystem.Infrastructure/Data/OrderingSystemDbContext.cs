@@ -48,6 +48,10 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.Status).IsRequired();
                 entity.Property(e => e.QrCode).IsRequired().HasMaxLength(255);
 
+                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
+                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
+                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
+
                 entity.HasMany(t => t.Sessions)
                       .WithOne(ts => ts.Table)
                       .HasForeignKey(ts => ts.TableId)
@@ -58,6 +62,10 @@ namespace OrderingSystem.Infrastructure.Data
             modelBuilder.Entity<TableSession>(entity =>
             {
                 entity.HasKey(e => e.TableSessionId);
+
+                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
+                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
+                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
 
                 entity.HasOne(e => e.Table)
                       .WithMany(t => t.Sessions)
@@ -103,6 +111,10 @@ namespace OrderingSystem.Infrastructure.Data
             {
                 entity.HasKey(e => e.OrderId);
                 entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
+
+                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
+                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
+                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
 
                 entity.HasOne(e => e.Session)
                       .WithMany(s => s.Orders)
