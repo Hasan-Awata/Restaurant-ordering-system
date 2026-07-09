@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.WebApi.Controllers.Base;
@@ -12,10 +13,12 @@ namespace OrderingSystem.WebApi.Controllers
     public class OrdersController : BaseController
     {
         private readonly IOrderCommandService _orderCommandService;
+        private readonly IOrderQuery _orderQuery;
 
-        public OrdersController(IOrderCommandService orderCommandService)
+        public OrdersController(IOrderCommandService orderCommandService, IOrderQuery orderQuery)
         {
             _orderCommandService = orderCommandService;
+            _orderQuery = orderQuery;
         }
 
         [HttpPost]
@@ -55,6 +58,14 @@ namespace OrderingSystem.WebApi.Controllers
             }
 
             var result = await _orderCommandService.CancelOrderByCustomerAsync(id, CurrentDeviceSessionId.Value);
+            return HandleResult(result);
+        }
+
+        [Authorize(Roles = "Admin,Cashier")] 
+        [HttpGet("pending")]
+        public async Task<IActionResult> GetPendingOrders([FromQuery] PageDTO page)
+        {
+            var result = await _orderQuery.GetPendingOrdersAsync(page);
             return HandleResult(result);
         }
     }
