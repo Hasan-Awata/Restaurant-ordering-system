@@ -1,4 +1,5 @@
 ﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Common;
@@ -42,14 +43,17 @@ namespace OrderingSystem.Application.Services
             return Result<MenuRecords.MenuItemResponse>.Success(null);
         }
         private readonly IMenueItemRepository _menuItemRepository;
-   
-        public MenueItemCommandService(IMenueItemRepository menuItemRepository)
+        private readonly ICategoryRepository _categoryRepository;
+        public MenueItemCommandService(IMenueItemRepository menuItemRepository, ICategoryRepository categoryRepository)
         {
             _menuItemRepository = menuItemRepository;
-            
+            _categoryRepository = categoryRepository;
         }
         public async Task<Result<MenuRecords.MenuItemResponse>> AddMenuItemAsync(MenuRecords.AddMenuItemRequest request)
         {
+            if (await _categoryRepository.GetCategoryByIdAsync(request.CategoryId) == null) {
+                return Result<MenuRecords.MenuItemResponse>.Failure("Invalid category ID.");
+            }
             if (request == null)
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("Request cannot be null.");

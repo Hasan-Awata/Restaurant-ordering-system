@@ -47,11 +47,11 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task<Category?> GetCategoryByIdAsync(int categoryId)
         {
             return await _dbContext.Categories.FirstOrDefaultAsync(c => c.CategoryId == categoryId);
+
         }
 
         public async Task<bool> GetCategoryExistsAsync(int categoryId)
         {
-            // استخدام AnyAsync أفضل للأداء من جلب الكائن كاملاً للتحقق من وجوده
             return await _dbContext.Categories.AnyAsync(c => c.CategoryId == categoryId);
         }
 
