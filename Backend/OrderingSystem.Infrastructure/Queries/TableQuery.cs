@@ -111,7 +111,7 @@ namespace OrderingSystem.Infrastructure.Queries
         }
 
     
-        public async Task<PagedResponse<TableResponse>> GetAllPendingActivationTablesAsync(PageDTO page)
+        public async Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page)
         {
             var query = _context.Tables
                 .AsNoTracking()
@@ -120,12 +120,22 @@ namespace OrderingSystem.Infrastructure.Queries
             var totalRecords = await query.CountAsync();
 
             var tables = await query
-                .Skip((page.PageNumber - 1) * page.PageSize)
-                .Take(page.PageSize)
-                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
-                .ToListAsync();
+                    .Skip((page.PageNumber - 1) * page.PageSize)
+                    .Take(page.PageSize)
+                    .Select(t => new PendingTableResponse(
+                        t.TableId,
+                        t.TableNumber,
+                        t.FloorNumber,
+                        t.QrCode,
+                        t.Status,
+                        t.Sessions
+                            .Where(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null)
+                            .Select(s => s.TableSessionId)
+                            .FirstOrDefault()
+                    ))
+                            .ToListAsync();
 
-            return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
+            return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
     }
 }
