@@ -29,4 +29,8 @@
     <ProjectReference Include="..\OrderingSystem.Infrastructure\OrderingSystem.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="wwwroot\images\menu\" />
+  </ItemGroup>
+
 </Project>

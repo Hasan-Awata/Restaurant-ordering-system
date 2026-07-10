@@ -6,7 +6,7 @@ using Microsoft.OpenApi;
 using OrderingSystem.Application.Interfaces.Auth;
 using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.Category;
-using OrderingSystem.Application.Interfaces.MenueItem; 
+using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
@@ -158,23 +158,28 @@ builder.Services.AddCors(options =>
                .AllowAnyMethod()
                .AllowAnyHeader()
                .AllowCredentials());
-            //builder.WithOrigins(
-            //    "http://127.0.0.1:5500",
-            //    "http://localhost:3000",
-            //    "http://localhost:8080"
-            //   )
-            //   .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-            //   .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
-            //   .AllowCredentials());
+    //builder.WithOrigins(
+    //    "http://127.0.0.1:5500",
+    //    "http://localhost:3000",
+    //    "http://localhost:8080"
+    //   )
+    //   .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+    //   .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
+    //   .AllowCredentials());
 });
 
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
     app.UseRouting();
+
+    // Enables the application to serve the saved menu images from wwwroot
+    app.UseStaticFiles();
+
     // Use the wide-open policy locally
     app.UseCors("DevelopmentPolicy");
 }
@@ -183,12 +188,17 @@ else
     // Enforce HTTPS routing in production
     app.UseHttpsRedirection();
     app.UseRouting();
+
+    // Enables the application to serve the saved menu images from wwwroot
+    app.UseStaticFiles();
+
     // Use the locked-down policy in production
     app.UseCors("ProductionPolicy");
 }
 
 app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapControllers().RequireRateLimiting("Fixed");
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 
@@ -198,7 +208,7 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<OrderingSystemDbContext>();
-        
+
         var config = services.GetRequiredService<IConfiguration>();
 
         context.Database.Migrate();
@@ -211,4 +221,5 @@ using (var scope = app.Services.CreateScope())
         logger.LogError(ex, "An error occurred while migrating the database.");
     }
 }
+
 app.Run();
