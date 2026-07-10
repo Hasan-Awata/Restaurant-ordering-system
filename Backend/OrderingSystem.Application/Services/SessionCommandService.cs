@@ -156,7 +156,7 @@ namespace OrderingSystem.Application.Services
             var hostDevice = session.Devices.FirstOrDefault(d => d.Role == enDeviceRole.Host);
             if (hostDevice != null)
             {
-                await _notifier.NotifyHostOfTableActivationAsync(hostDevice.DeviceSessionId);
+                await _notifier.NotifyHostOfTableActivationAsync(session.TableSessionId);
             }
 
             return Result<TableSessionResponse>.Success(session.ToResponse());
