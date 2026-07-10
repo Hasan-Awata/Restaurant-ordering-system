@@ -51,14 +51,14 @@ namespace OrderingSystem.Application.Services
             }
 
             // If changing floor/number, ensure no conflict
-            if ((table.TableNumber != request.TableNumber || table.FloorNumber != request.Floor) &&
-                await _tableRepository.ExistsAsync(request.TableNumber, request.Floor))
+            if ((table.TableNumber != request.TableNumber || table.FloorNumber != request.FloorNumber) &&
+                await _tableRepository.ExistsAsync(request.TableNumber, request.FloorNumber))
             {
                 return Result<TableResponse>.Failure("A table with this number already exists on this floor.", enErrorType.Validation);
             }
 
             table.TableNumber = request.TableNumber;
-            table.FloorNumber = request.Floor;
+            table.FloorNumber = request.FloorNumber;
             table.Status = request.Status;
 
             // Note: We deliberately do NOT update the QR code here, as the physical QR sticker on the table shouldn't break.

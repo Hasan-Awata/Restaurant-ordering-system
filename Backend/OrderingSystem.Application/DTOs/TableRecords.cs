@@ -7,7 +7,7 @@ namespace OrderingSystem.Application.DTOs
 {
     // Command Payloads
     public record AddTableRequest(int TableNumber, int FloorNumber);
-    public record UpdateTableRequest(int TableId, int TableNumber, int Floor, enTableStatus Status);
+    public record UpdateTableRequest(int TableId, int TableNumber, int FloorNumber, enTableStatus Status);
 
     // Query/Command Response Payloads
     public record TableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status);
