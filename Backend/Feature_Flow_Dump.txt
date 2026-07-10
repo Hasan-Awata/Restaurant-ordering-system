@@ -1,0 +1,860 @@
+﻿DEPENDENCY TRACER DUMP
+ENTRY POINTS: TablesController.cs
+RULES: Domain Included, DbContext Included, Interfaces/Mappers Excluded.
+============================================================
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TablesController.cs
+----------------------------------------
+namespace OrderingSystem.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/tables")]
+    public class TablesController : ControllerBase
+    {
+        private readonly ITableCommandService _tableCommandService;
+        private readonly ITableQuery _tableQueryService;
+
+        public TablesController(ITableCommandService tableCommandService, ITableQuery tableQueryService)
+        {
+            _tableCommandService = tableCommandService;
+            _tableQueryService = tableQueryService;
+        }
+
+        // ==========================================
+        // الكود القديم الخاص بك (لم يتم تغييره)
+        // ==========================================
+
+        [HttpPost]
+        public async Task<IActionResult> AddTable([FromBody] AddTableRequest request)
+        {
+            var result = await _tableCommandService.AddTableAsync(request);
+            if (!result.IsSuccess)
+            {
+                return result.ErrorType == enErrorType.Validation ? BadRequest(result.ErrorMessage) : StatusCode(500, result.ErrorMessage);
+            }
+
+            return CreatedAtAction(nameof(GetTableById), new { tableId = result.Value!.TableId }, result.Value);
+        }
+
+        [HttpPut]
+        public async Task<IActionResult> UpdateTable([FromBody] UpdateTableRequest request)
+        {
+            var result = await _tableCommandService.UpdateTableAsync(request);
+            if (!result.IsSuccess)
+            {
+                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
+                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
+                return StatusCode(500, result.ErrorMessage);
+            }
+            return Ok(result.Value);
+        }
+        
+        [HttpDelete("{tableId}")]
+        public async Task<IActionResult> DeleteTable(int tableId)
+        {
+            var result = await _tableCommandService.DeleteTableAsync(tableId);
+            if (!result.IsSuccess)
+            {
+                if (result.ErrorType == enErrorType.NotFound) return NotFound(result.ErrorMessage);
+                if (result.ErrorType == enErrorType.Validation) return BadRequest(result.ErrorMessage);
+                return StatusCode(500, result.ErrorMessage);
+            }
+            return NoContent();
+        }
+
+        [HttpGet("{tableId}/qrcode")]
+        public async Task<IActionResult> GetQrCode(int tableId)
+        {
+            var qrCode = await _tableQueryService.GetTableQrCodeAsync(tableId);
+            if (qrCode == null) return NotFound($"Table ID {tableId} not found.");
+
+            return Ok(new { QrCode = qrCode });
+        }
+
+        
+
+        [HttpGet("{tableId}")]
+        public async Task<IActionResult> GetTableById(int tableId)
+        {
+            var result = await _tableQueryService.GetTableByIdAsync(tableId);
+            if (result == null) return NotFound($"Table ID {tableId} not found.");
+
+            return Ok(result);
+        }
+
+        [HttpGet("floor/{floorNumber}/number/{tableNumber}")]
+        public async Task<IActionResult> GetTableByNumber(int tableNumber, int floorNumber)
+        {
+            var result = await _tableQueryService.GetTableByNumberAsync(tableNumber, floorNumber);
+            if (result == null) return NotFound($"Table Number {tableNumber} on Floor {floorNumber} not found.");
+
+            return Ok(result);
+        }
+
+        [HttpGet("floor/{floorNumber}")]
+        public async Task<IActionResult> GetAllTablesByFloor([FromQuery] PageDTO page, int floorNumber)
+        {
+            var result = await _tableQueryService.GetAllTablesByFloorAsync(page, floorNumber);
+            return Ok(result);
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetAllTables([FromQuery] PageDTO page)
+        {
+            var result = await _tableQueryService.GetAllTablesAsync(page);
+            return Ok(result);
+        }
+
+        [HttpGet("status/{tableStatus}")]
+        public async Task<IActionResult> GetAllTablesByStatus([FromQuery] PageDTO page, enTableStatus tableStatus)
+        {
+            var result = await _tableQueryService.GetAllTablesByStatusAsync(page, tableStatus);
+            return Ok(result);
+        }
+
+        [HttpGet("pending-activation")]
+        public async Task<IActionResult> GetAllPendingActivationTables([FromQuery] PageDTO page)
+        {
+            var result = await _tableQueryService.GetAllPendingActivationTablesAsync(page);
+            return Ok(result);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\Paged\PageDTO.cs
+----------------------------------------
+namespace OrderingSystem.Application.DTOs.Paged
+{
+    public class PageDTO
+    {
+        [Required(ErrorMessage = "Enter the page size")]
+        [Range(1, 100, ErrorMessage = "Page size must be between 1 and 100.")]
+        public int PageSize { get; set; }
+        
+        [Required(ErrorMessage = "Enter the page number")]
+        [Range(1, int.MaxValue, ErrorMessage = "Page number must be at least 1.")]
+        public int PageNumber { get; set; }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\TableCommandService.cs
+----------------------------------------
+namespace OrderingSystem.Application.Services
+{
+    public class TableCommandService : ITableCommandService
+    {
+        private readonly ITableRepository _tableRepository;
+
+        public TableCommandService(ITableRepository tableRepository)
+        {
+            _tableRepository = tableRepository;
+        }
+
+        public async Task<Result<TableResponse>> AddTableAsync(AddTableRequest request)
+        {
+            // Business Rule: Check if table number on that floor already exists
+            if (await _tableRepository.ExistsAsync(request.TableNumber, request.Floor))
+            {
+                return Result<TableResponse>.Failure($"Table {request.TableNumber} already exists on Floor {request.Floor}.", enErrorType.Validation);
+            }
+
+            // Generate unique QR Code payload
+            string uniqueSegment = Guid.CreateVersion7().ToString()[..8];
+            string generatedQrCode = $"TBL-F{request.Floor}-N{request.TableNumber}-{uniqueSegment}".ToUpper();
+
+            var newTable = new Table
+            {
+                TableNumber = request.TableNumber,
+                FloorNumber = request.Floor,
+                QrCode = generatedQrCode,
+                Status = enTableStatus.Available
+            };
+
+            await _tableRepository.AddTableAsync(newTable);
+
+            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status);
+            
+            return Result<TableResponse>.Success(response);
+        }
+
+        public async Task<Result<TableResponse>> UpdateTableAsync(UpdateTableRequest request)
+        {
+            var table = await _tableRepository.GetTableByIdAsync(request.TableId);
+            if (table == null)
+            {
+                return Result<TableResponse>.Failure("Table not found.", enErrorType.NotFound);
+            }
+
+            // If changing floor/number, ensure no conflict
+            if ((table.TableNumber != request.TableNumber || table.FloorNumber != request.Floor) &&
+                await _tableRepository.ExistsAsync(request.TableNumber, request.Floor))
+            {
+                return Result<TableResponse>.Failure("A table with this number already exists on this floor.", enErrorType.Validation);
+            }
+
+            table.TableNumber = request.TableNumber;
+            table.FloorNumber = request.Floor;
+            table.Status = request.Status;
+
+            // Note: We deliberately do NOT update the QR code here, as the physical QR sticker on the table shouldn't break.
+
+            await _tableRepository.UpdateTableAsync(table);
+
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status);
+            return Result<TableResponse>.Success(response);
+        }
+
+        public async Task<Result> DeleteTableAsync(int tableId)
+        {
+            var table = await _tableRepository.GetTableByIdAsync(tableId);
+            if (table == null)
+            {
+                return Result.Failure("Table not found.", enErrorType.NotFound);
+            }
+
+            // Optional Business Rule: Check if table has active sessions before deleting
+            if (table.Status != enTableStatus.Available)
+            {
+                return Result.Failure("Cannot delete a table that is currently occupied or billing.", enErrorType.Validation);
+            }
+
+            await _tableRepository.DeleteTableAsync(table);
+            return Result.Success();
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\TableQuery.cs
+----------------------------------------
+namespace OrderingSystem.Infrastructure.Queries
+{
+    public class TableQuery : ITableQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableQuery(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task<string?> GetTableQrCodeAsync(int tableId)
+        {
+            return await _context.Tables
+                .AsNoTracking()
+                .Where(t => t.TableId == tableId)
+                .Select(t => t.QrCode)
+                .FirstOrDefaultAsync();
+        }
+
+        public async Task<TableResponse?> GetTableByIdAsync(int tableId)
+        {
+            var table = await _context.Tables
+                .AsNoTracking()
+                .Where(t => t.TableId == tableId)
+                .Select(t => new TableResponse
+                (
+                    t.TableId,
+                    t.TableNumber,
+                    t.FloorNumber,
+                    t.QrCode,
+                    t.Status
+                ))
+                .FirstOrDefaultAsync();
+            return table;
+        }
+
+        public async Task<TableResponse?> GetTableByNumberAsync(int tableNumber, int floorNumber)
+        {
+            var table = await _context.Tables
+                .AsNoTracking()
+                .Where(t => t.TableNumber == tableNumber && t.FloorNumber == floorNumber)
+                .Select(t => new TableResponse
+                (
+                    t.TableId,
+                    t.TableNumber,
+                    t.FloorNumber,
+                    t.QrCode,
+                    t.Status
+                ))
+                .FirstOrDefaultAsync();
+            return table;
+        }
+
+          public async Task<PagedResponse<TableResponse>> GetAllTablesByFloorAsync(PageDTO page, int floorNumber)
+        {
+            var query = _context.Tables
+                .AsNoTracking()
+                .Where(t => t.FloorNumber == floorNumber);
+
+            var totalRecords = await query.CountAsync();
+            var tables = await query
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
+                .ToListAsync();
+
+            return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
+        }
+
+        
+        public async Task<PagedResponse<TableResponse>> GetAllTablesAsync(PageDTO page)
+        {
+            var query = _context.Tables.AsNoTracking();
+            var totalRecords = await query.CountAsync();
+
+            var tables = await query
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
+                .ToListAsync();
+
+            return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
+        }
+
+    
+        public async Task<PagedResponse<TableResponse>> GetAllTablesByStatusAsync(PageDTO page, enTableStatus tableStatus)
+        {
+            var query = _context.Tables
+                .AsNoTracking()
+                .Where(t => t.Status == tableStatus);
+
+            var totalRecords = await query.CountAsync();
+
+            var tables = await query
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
+                .ToListAsync();
+
+            return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
+        }
+
+    
+        public async Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page)
+        {
+            var query = _context.Tables
+                .AsNoTracking()
+                .Where(t => t.Status == enTableStatus.Occupied && t.Sessions.Any(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null));
+
+            var totalRecords = await query.CountAsync();
+
+            var tables = await query
+                    .Skip((page.PageNumber - 1) * page.PageSize)
+                    .Take(page.PageSize)
+                    .Select(t => new PendingTableResponse(
+                        t.TableId,
+                        t.TableNumber,
+                        t.FloorNumber,
+                        t.QrCode,
+                        t.Status,
+                        t.Sessions
+                            .Where(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null)
+                            .Select(s => s.TableSessionId)
+                            .FirstOrDefault()
+                    ))
+                    .ToListAsync();
+
+            return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\TableRepository.cs
+----------------------------------------
+namespace OrderingSystem.Infrastructure.Repositories
+{
+    public class TableRepository : ITableRepository
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public TableRepository(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task AddTableAsync(Table table)
+        {
+            _context.Tables.Add(table);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task UpdateTableAsync(Table table)
+        {
+            _context.Tables.Update(table);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task DeleteTableAsync(Table table)
+        {
+            _context.Tables.Remove(table);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task<bool> ExistsAsync(int tableNumber, int floor)
+        {
+            return await _context.Tables.AnyAsync(t => t.TableNumber == tableNumber && t.FloorNumber == floor);
+        }
+
+        public async Task<Table?> GetTableByIdAsync(int tableId)
+        {
+            return await _context.Tables.FirstOrDefaultAsync(t => t.TableId == tableId);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\Paged\PagedResponse.cs
+----------------------------------------
+namespace OrderingSystem.Application.DTOs.Paged
+{
+    public class PagedResponse<T>
+    {
+        public IEnumerable<T> Data { get; set; } = new List<T>();
+        public int PageNumber {get; set; }
+        public int PageSize {get; set; }
+        public int TotalRecords { get; set; }
+        public int TotalPages => (int)Math.Ceiling((double)TotalRecords / PageSize);
+
+        public PagedResponse(IEnumerable<T> data, int pageNumber, int pageSize, int totalRecords)
+        {
+            Data = data;
+            PageNumber = pageNumber;
+            PageSize = pageSize;
+            TotalRecords = totalRecords;
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enSessionStatus.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enSessionStatus
+    {
+        PendingActivation = 1,
+        Active = 2,
+        Closed = 3
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\TableSession.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Entities
+{
+    public class TableSession
+    {
+        public Guid TableSessionId { get; set; } // Also acts as the secure token for the table session
+        public int TableId { get; set; }
+        public enSessionStatus Status { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? ClosedAt { get; set; } // Nullable since it might not be closed yet
+
+        // Navigation Properties
+        // Using null! tells the compiler EF Core will handle populating this when loaded
+        public Table Table { get; set; } = null!;
+
+        // Initializing collections is correct and prevents NullReferenceExceptions
+        public ICollection<DeviceSession> Devices { get; set; } = new List<DeviceSession>();
+        public ICollection<Order> Orders { get; set; } = new List<Order>();
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\DeviceSession.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Entities
+{
+    public class DeviceSession
+    {
+        public Guid DeviceSessionId { get; set; } // Also acts as the secure token for the device session
+        public Guid TableSessionId { get; set; }
+        public enDeviceRole Role { get; set; }
+        public bool IsApproved { get; set; }
+
+        // Navigation Properties
+        public TableSession TableSession { get; set; } = null!; // Avoid = new TableSession() to prevent EF Core from creating a new database row
+        public ICollection<Order> Orders { get; set; } = new List<Order>();
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enOrderStatus.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enOrderStatus
+    {
+        Pending = 1,
+        Preparing = 2,
+        Served = 3,
+        Cancelled = 4
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enErrorType.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enErrorType
+    {
+        None = 0,
+        Validation = 400,
+        NotFound = 404,
+        Conflict = 409,
+        Unauthorized = 401,
+        BalanceViolation = 422,
+        Failure = 500
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enRoleType.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enRoleType
+    {
+        Admin = 1,
+        Cashier = 2,
+        Waiter = 3
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\OrderItem.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Entities
+{
+    public class OrderItem
+    {
+        public int OrderItemId { get; set; }
+        public int OrderId { get; set; }
+        public int MenuItemId { get; set; }
+        public int Quantity { get; set; }
+        public decimal UnitPrice { get; set; }
+
+        // Navigation
+        public Order Order { get; set; } = null!;
+        public MenuItem MenuItem { get; set; } = null!;
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Common\Result.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Common
+{
+    public class Result
+    {
+        public bool IsSuccess { get; }
+        public string? ErrorMessage { get; }
+        public enErrorType ErrorType { get; }
+
+        protected Result(bool isSuccess, string? errorMessage, enErrorType errorType)
+        {
+            IsSuccess = isSuccess;
+            ErrorMessage = errorMessage;
+            ErrorType = errorType;
+        }
+
+        public static Result Success() => new(true, null, enErrorType.None);
+        public static Result Failure(string message, enErrorType errorType = enErrorType.Failure)
+            => new(false, message, errorType);
+    }
+
+    public class Result<T> : Result
+    {
+        public T? Value { get; }
+
+        private Result(T? value, bool isSuccess, string? errorMessage, enErrorType errorType)
+            : base(isSuccess, errorMessage, errorType)
+        {
+            Value = value;
+        }
+
+        public static Result<T> Success(T value) => new(value, true, null, enErrorType.None);
+        public static new Result<T> Failure(string message, enErrorType errorType = enErrorType.Failure)
+            => new(default, false, message, errorType);
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\MenuItem.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Entities
+{
+    public class MenuItem
+    {
+        public int MenuItemId { get; set; }
+        public int CategoryId { get; set; }
+        public string NameAr { get; set; } = string.Empty;
+        public string NameEn { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public string ImageUrl { get; set; } = string.Empty;
+        public bool IsAvailable { get; set; }
+
+        // Navigation
+        public Category Category { get; set; } = null!;
+        public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Table.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Entities
+{
+    public class Table
+    {
+        public int TableId { get; set; }
+        public int TableNumber { get; set; }
+        public int FloorNumber { get; set; }
+        public string QrCode { get; set; } = string.Empty;
+        public enTableStatus Status { get; set; }
+
+        // Navigation
+        public ICollection<TableSession> Sessions { get; set; } = new List<TableSession>();
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Data\OrderingSystemDbContext.cs
+----------------------------------------
+namespace OrderingSystem.Infrastructure.Data
+{
+    public class OrderingSystemDbContext : DbContext
+    {
+        public OrderingSystemDbContext(DbContextOptions<OrderingSystemDbContext> options)
+            : base(options)
+        {
+        }
+
+        public DbSet<User> Users { get; set; }
+        public DbSet<Table> Tables { get; set; }
+        public DbSet<TableSession> TableSessions { get; set; }
+        public DbSet<Category> Categories { get; set; }
+        public DbSet<MenuItem> MenuItems { get; set; }
+        public DbSet<DeviceSession> SessionDevices { get; set; }
+        public DbSet<Order> Orders { get; set; }
+        public DbSet<OrderItem> OrderItems { get; set; }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+
+            // 1. Users
+            modelBuilder.Entity<User>(entity =>
+            {
+                entity.HasKey(e => e.UserId);
+                entity.Property(e => e.FullName).IsRequired().HasMaxLength(255);
+                entity.Property(e => e.PasswordHash).IsRequired();
+                entity.Property(e => e.Role).IsRequired();
+                entity.Property(e => e.RefreshToken)
+                      .HasMaxLength(255)
+                      .IsRequired(false);
+                entity.Property(e => e.RefreshTokenExpiryTime)
+                      .IsRequired(false);
+                entity.Property(e => e.AbsoluteRefreshTokenExpiryTime)
+                      .IsRequired(false);
+            });
+
+            // 2. Tables
+            modelBuilder.Entity<Table>(entity =>
+            {
+                entity.HasKey(e => e.TableId);
+                entity.Property(e => e.TableNumber).IsRequired();
+                entity.Property(e => e.FloorNumber).IsRequired();
+                entity.Property(e => e.Status).IsRequired();
+                entity.Property(e => e.QrCode).IsRequired().HasMaxLength(255);
+
+                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
+                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
+                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
+
+                entity.HasMany(t => t.Sessions)
+                      .WithOne(ts => ts.Table)
+                      .HasForeignKey(ts => ts.TableId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // 3. TableSessions
+            modelBuilder.Entity<TableSession>(entity =>
+            {
+                entity.HasKey(e => e.TableSessionId);
+
+                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
+                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
+                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
+
+                entity.HasOne(e => e.Table)
+                      .WithMany(t => t.Sessions)
+                      .HasForeignKey(e => e.TableId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // 4. Categories
+            modelBuilder.Entity<Category>(entity =>
+            {
+                entity.HasKey(e => e.CategoryId);
+                entity.Property(e => e.NameAr).HasMaxLength(255);
+                entity.Property(e => e.NameEn).HasMaxLength(255);
+            });
+
+            // 5. MenuItems
+            modelBuilder.Entity<MenuItem>(entity =>
+            {
+                entity.HasKey(e => e.MenuItemId);
+                entity.Property(e => e.Price).HasPrecision(18, 2);
+                entity.Property(e => e.NameAr).HasMaxLength(255);
+                entity.Property(e => e.NameEn).HasMaxLength(255);
+             
+                entity.HasOne(e => e.Category)
+                      .WithMany(c => c.MenuItems)
+                      .HasForeignKey(e => e.CategoryId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // 6. DeviceSession
+            modelBuilder.Entity<DeviceSession>(entity =>
+            {
+                entity.HasKey(e => e.DeviceSessionId);
+
+                entity.HasOne(e => e.TableSession)
+                      .WithMany(s => s.Devices)
+                      .HasForeignKey(e => e.TableSessionId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // 7. Orders
+            modelBuilder.Entity<Order>(entity =>
+            {
+                entity.HasKey(e => e.OrderId);
+                entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
+
+                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
+                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
+                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
+
+                entity.HasOne(e => e.Session)
+                      .WithMany(s => s.Orders)
+                      .HasForeignKey(e => e.TableSessionId)
+                      .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasOne(e => e.Device)
+                      .WithMany(d => d.Orders)
+                      .HasForeignKey(e => e.DeviceSessionId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // 8. OrderItems
+            modelBuilder.Entity<OrderItem>(entity =>
+            {
+                entity.HasKey(e => e.OrderItemId);
+                entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
+
+                entity.HasOne(e => e.Order)
+                      .WithMany(o => o.OrderItems)
+                      .HasForeignKey(e => e.OrderId)
+                      .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(e => e.MenuItem)
+                      .WithMany(m => m.OrderItems)
+                      .HasForeignKey(e => e.MenuItemId)
+                      .OnDelete(DeleteBehavior.Restrict);
+            });
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\User.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Entities
+{
+    public class User
+    {
+        public int UserId { get; set; }
+        public string FullName { get; set; } = string.Empty;
+        public string PasswordHash { get; set; } = string.Empty;
+        public enRoleType Role { get; set; }
+        public string? RefreshToken { get; set; }
+        public DateTime? RefreshTokenExpiryTime { get; set; }
+        public DateTime? AbsoluteRefreshTokenExpiryTime { get; set; } 
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Category.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Entities
+{
+    public class Category
+    {
+        public int CategoryId { get; set; }
+        public string NameAr { get; set; } = string.Empty;
+        public string NameEn { get; set; } = string.Empty;
+        public bool IsAvailable { get; set; }
+
+        // Navigation
+        public ICollection<MenuItem> MenuItems { get; set; } = new List<MenuItem>();
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enDeviceRole.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enDeviceRole
+    {
+        Host = 1,
+        Guest = 2
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enTableStatus.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enTableStatus
+    {
+        Available = 1,
+        Occupied = 2,
+        Billing = 3
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Order.cs
+----------------------------------------
+namespace OrderingSystem.Domain.Entities
+{
+    public class Order
+    {
+        public int OrderId { get; set; }
+        public Guid TableSessionId { get; set; }
+        public Guid DeviceSessionId { get; set; }
+        public decimal TotalAmount { get; set; }
+        public enOrderStatus OrderStatus { get; set; }
+        public DateTime CreatedAt { get; set; }
+
+        // Navigation
+        public TableSession Session { get; set; }
+        public DeviceSession Device { get; set; }
+        public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
+    }
+}
+
+
+
+============================================================
+END OF DUMP. Total files analyzed: 22

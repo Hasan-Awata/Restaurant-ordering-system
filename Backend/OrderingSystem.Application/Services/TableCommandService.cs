@@ -18,19 +18,19 @@ namespace OrderingSystem.Application.Services
         public async Task<Result<TableResponse>> AddTableAsync(AddTableRequest request)
         {
             // Business Rule: Check if table number on that floor already exists
-            if (await _tableRepository.ExistsAsync(request.TableNumber, request.Floor))
+            if (await _tableRepository.ExistsAsync(request.TableNumber, request.FloorNumber))
             {
-                return Result<TableResponse>.Failure($"Table {request.TableNumber} already exists on Floor {request.Floor}.", enErrorType.Validation);
+                return Result<TableResponse>.Failure($"Table {request.TableNumber} already exists on Floor {request.FloorNumber}.", enErrorType.Validation);
             }
 
             // Generate unique QR Code payload
             string uniqueSegment = Guid.CreateVersion7().ToString()[..8];
-            string generatedQrCode = $"TBL-F{request.Floor}-N{request.TableNumber}-{uniqueSegment}".ToUpper();
+            string generatedQrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{uniqueSegment}".ToUpper();
 
             var newTable = new Table
             {
                 TableNumber = request.TableNumber,
-                FloorNumber = request.Floor,
+                FloorNumber = request.FloorNumber,
                 QrCode = generatedQrCode,
                 Status = enTableStatus.Available
             };
