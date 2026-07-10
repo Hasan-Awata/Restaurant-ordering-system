@@ -192,6 +192,7 @@ builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IJwtProvider, JwtProvider>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 builder.Services.AddScoped<IOrderCommandService, OrderCommandService>();
+builder.Services.AddScoped<IOrderQuery, OrderQuery>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -642,6 +643,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.WebApi.Controllers.Base;
@@ -653,10 +655,12 @@ namespace OrderingSystem.WebApi.Controllers
     public class OrdersController : BaseController
     {
         private readonly IOrderCommandService _orderCommandService;
+        private readonly IOrderQuery _orderQuery;
 
-        public OrdersController(IOrderCommandService orderCommandService)
+        public OrdersController(IOrderCommandService orderCommandService, IOrderQuery orderQuery)
         {
             _orderCommandService = orderCommandService;
+            _orderQuery = orderQuery;
         }
 
         [HttpPost]
@@ -696,6 +700,14 @@ namespace OrderingSystem.WebApi.Controllers
             }
 
             var result = await _orderCommandService.CancelOrderByCustomerAsync(id, CurrentDeviceSessionId.Value);
+            return HandleResult(result);
+        }
+
+        [Authorize(Roles = "Admin,Cashier")] 
+        [HttpGet("pending")]
+        public async Task<IActionResult> GetPendingOrders([FromQuery] PageDTO page)
+        {
+            var result = await _orderQuery.GetPendingOrdersAsync(page);
             return HandleResult(result);
         }
     }
@@ -1458,6 +1470,25 @@ namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
         Task<Result<bool>> CancelOrderByCustomerAsync(int orderId, Guid deviceSessionId);
     }
 }
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\OrdersInterfaces\IOrderQuery.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.DTOs.Paged;
+using OrderingSystem.Domain.Common;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
+{
+    public interface IOrderQuery
+    {
+        Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page);
+    }
+}
+
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\OrdersInterfaces\IOrderRepository.cs
@@ -6431,6 +6462,65 @@ namespace OrderingSystem.Infrastructure.Queries
         public async Task<Result<MenuRecords.MenuItemResponse>> GetItemByIdAsync(int menuItemId)
         {
             return await GetMenuItemAsync(menuItemId);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\OrderQuery.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.DTOs.Paged;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace OrderingSystem.Infrastructure.Queries
+{
+    public class OrderQuery : IOrderQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public OrderQuery(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page)
+        {
+            var query = _context.Orders
+                .AsNoTracking()
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.MenuItem)
+                .Where(o => o.OrderStatus == enOrderStatus.Pending);
+
+            var totalRecords = await query.CountAsync();
+
+            var items = await query
+                .OrderBy(o => o.CreatedAt) 
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(o => new OrderRecords.OrderResponse(
+                    o.OrderId,
+                    o.TotalAmount,
+                    o.OrderStatus,
+                    o.CreatedAt,
+                    o.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
+                        oi.MenuItemId,
+                        oi.MenuItem.NameEn,
+                        oi.MenuItem.NameAr,
+                        oi.Quantity,
+                        oi.UnitPrice
+                    )).ToList()
+                ))
+                .ToListAsync();
+
+            var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
+            return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
         }
     }
 }

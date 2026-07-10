@@ -30,11 +30,12 @@ namespace OrderingSystem.Infrastructure.Queries
             var totalRecords = await query.CountAsync();
 
             var items = await query
-                .OrderBy(o => o.CreatedAt) 
+                .OrderBy(o => o.CreatedAt)
                 .Skip((page.PageNumber - 1) * page.PageSize)
                 .Take(page.PageSize)
                 .Select(o => new OrderRecords.OrderResponse(
                     o.OrderId,
+                    o.Session.Table.TableNumber,
                     o.TotalAmount,
                     o.OrderStatus,
                     o.CreatedAt,
