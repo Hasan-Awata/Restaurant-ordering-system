@@ -16,7 +16,7 @@ namespace OrderingSystem.Domain.Entities
         public bool IsAvailable { get; set; }
 
         // Navigation
-        public Category Category { get; set; } = new Category();
+        public Category Category { get; set; } = null!;
         public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
     }
 }

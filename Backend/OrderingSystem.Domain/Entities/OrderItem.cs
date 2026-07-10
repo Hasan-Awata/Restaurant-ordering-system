@@ -13,7 +13,7 @@ namespace OrderingSystem.Domain.Entities
         public decimal UnitPrice { get; set; }
 
         // Navigation
-        public Order Order { get; set; } = new Order();
-        public MenuItem MenuItem { get; set; } = new MenuItem();
+        public Order Order { get; set; } = null!;
+        public MenuItem MenuItem { get; set; } = null!;
     }
 }
