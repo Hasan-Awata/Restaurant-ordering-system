@@ -67,7 +67,7 @@ namespace OrderingSystem.Application.Services
             var responseItems = order.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
                 oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.Quantity, oi.UnitPrice)).ToList();
 
-            var response = new OrderRecords.OrderResponse(order.OrderId, order.TotalAmount, order.OrderStatus, order.CreatedAt, responseItems);
+            var response = new OrderRecords.OrderResponse(order.OrderId, request.TableNumber, order.TotalAmount, order.OrderStatus, order.CreatedAt, responseItems);
             return Result<OrderRecords.OrderResponse>.Success(response);
         }
 

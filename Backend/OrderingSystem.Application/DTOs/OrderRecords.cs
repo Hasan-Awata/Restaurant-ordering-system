@@ -4,7 +4,7 @@ namespace OrderingSystem.Application.DTOs
 {
     public class OrderRecords
     {
-        public record CreateOrderRequest(Guid TableSessionId, Guid DeviceSessionId, List<OrderItemRequest> Items);
+        public record CreateOrderRequest(int TableNumber, Guid TableSessionId, Guid DeviceSessionId, List<OrderItemRequest> Items);
         public record OrderItemRequest(int MenuItemId, int Quantity);
 
         public record OrderResponse(int OrderId, int TableNumber, decimal TotalAmount, enOrderStatus OrderStatus, DateTime CreatedAt, List<OrderItemResponse> Items);
