@@ -38,7 +38,7 @@ namespace OrderingSystem.WebApi.Controllers
                 {
                     HttpOnly = true,
                     Secure = true,
-                    SameSite = SameSiteMode.None,
+                    SameSite = SameSiteMode.Lax,
                     Expires = DateTime.UtcNow.AddHours(4)
                 };
 
