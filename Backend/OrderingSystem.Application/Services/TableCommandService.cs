@@ -18,9 +18,21 @@ namespace OrderingSystem.Application.Services
         public async Task<Result<TableResponse>> AddTableAsync(AddTableRequest request)
         {
             // Business Rule: Check if table number on that floor already exists
-            if (await _tableRepository.ExistsAsync(request.TableNumber, request.FloorNumber))
+            var existingTable = await _tableRepository.GetByNumberAndFloorWithDeletedAsync(request.TableNumber, request.FloorNumber);
+
+            if (existingTable != null)
             {
-                return Result<TableResponse>.Failure($"Table {request.TableNumber} already exists on Floor {request.FloorNumber}.", enErrorType.Validation);
+                if (!existingTable.IsDeleted)
+                {
+                    // The table exists and is active
+                    return Result<TableResponse>.Failure(
+                        $"Table {request.TableNumber} already exists on Floor {request.FloorNumber}.",
+                        enErrorType.Validation);
+                }
+
+                // 2. Delegate to the private restore method
+                var restoredResponse = await RestoreTableAsync(existingTable, request);
+                return Result<TableResponse>.Success(restoredResponse);
             }
 
             // Generate unique QR Code payload
@@ -85,6 +97,26 @@ namespace OrderingSystem.Application.Services
 
             await _tableRepository.DeleteTableAsync(table);
             return Result.Success();
+        }
+
+        private async Task<TableResponse> RestoreTableAsync(Table existingTable, AddTableRequest request)
+        {
+            existingTable.IsDeleted = false;
+            existingTable.Status = enTableStatus.Available;
+
+            // Regenerate the QR Code for security so old printed codes become invalid
+            string newUniqueSegment = Guid.CreateVersion7().ToString()[..8];
+            existingTable.QrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{newUniqueSegment}".ToUpper();
+
+            await _tableRepository.UpdateTableAsync(existingTable);
+
+            return new TableResponse(
+                existingTable.TableId,
+                existingTable.TableNumber,
+                existingTable.FloorNumber,
+                existingTable.QrCode,
+                existingTable.Status
+            );
         }
     }
 }

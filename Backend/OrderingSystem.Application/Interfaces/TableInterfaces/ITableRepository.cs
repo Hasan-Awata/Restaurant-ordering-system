@@ -13,6 +13,7 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
         Task<bool> ExistsAsync(int tableNumber, int floor);
 
         // Reading methods (for business logic)
+        public Task<Table?> GetByNumberAndFloorWithDeletedAsync(int tableNumber, int floor);
         public Task<Table?> GetTableByIdAsync(int tableId);
     }
 }

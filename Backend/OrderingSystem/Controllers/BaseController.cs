@@ -1,12 +1,14 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
-using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 namespace OrderingSystem.WebApi.Controllers.Base
 {
     [ApiController]
+    [Produces("application/problem+json")] 
     [Route("api/[controller]")]
     public abstract class BaseController : ControllerBase
     {
@@ -96,6 +98,22 @@ namespace OrderingSystem.WebApi.Controllers.Base
                 enErrorType.Failure => "Server Error",
                 _ => "An unexpected error occurred"
             };
+
+            if (errorType== enErrorType.Validation)
+            {
+                // We create a dictionary to fit the requirement of ValidationProblemDetails
+                var errors = new Dictionary<string, string[]>
+        {
+            { "BusinessRule", new[] { errorMessage ?? "Validation failed" } }
+        };
+
+                return ValidationProblem(new ValidationProblemDetails(errors)
+                {
+                    Status = statusCode,
+                    Title = "Validation Error",
+                    Detail = errorMessage
+                });
+            }
 
             // The Problem() method automatically formats the response as a standard application/problem+json ProblemDetails object
             return Problem(

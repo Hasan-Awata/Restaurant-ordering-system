@@ -45,5 +45,12 @@ namespace OrderingSystem.Infrastructure.Repositories
         {
             return await _context.Tables.FirstOrDefaultAsync(t => t.TableId == tableId);
         }
+
+        public async Task<Table?> GetByNumberAndFloorWithDeletedAsync(int tableNumber, int floor)
+        {
+            return await _context.Tables
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(t => t.TableNumber == tableNumber && t.FloorNumber == floor);
+        }
     }
 }

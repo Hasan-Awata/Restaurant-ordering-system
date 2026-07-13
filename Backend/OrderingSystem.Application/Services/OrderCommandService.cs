@@ -26,8 +26,20 @@ namespace OrderingSystem.Application.Services
 
         public async Task<Result<OrderRecords.OrderResponse>> AddOrderAsync(OrderRecords.CreateOrderRequest request)
         {
+            if (request == null)
+            {
+                return Result<OrderRecords.OrderResponse>.Failure("Request cannot be null.", enErrorType.Validation);
+            }
+
+            if (request.TableNumber <= 0)
+            {
+                return Result<OrderRecords.OrderResponse>.Failure("Table number must be greater than zero.", enErrorType.Validation);
+            }
+
             if (!request.Items.Any())
+            {
                 return Result<OrderRecords.OrderResponse>.Failure("Order must contain at least one item.", enErrorType.Validation);
+            }
 
             decimal totalAmount = 0;
             var orderItems = new List<OrderItem>();
