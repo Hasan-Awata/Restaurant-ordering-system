@@ -47,6 +47,7 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.FloorNumber).IsRequired();
                 entity.Property(e => e.Status).IsRequired();
                 entity.Property(e => e.QrCode).IsRequired().HasMaxLength(255);
+                entity.Property(e => e.IsDeleted).IsRequired();
 
                 entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
                       .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
@@ -56,6 +57,8 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithOne(ts => ts.Table)
                       .HasForeignKey(ts => ts.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
 
             // 3. TableSessions
@@ -79,6 +82,9 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.HasKey(e => e.CategoryId);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
+                entity.Property(e => e.IsDeleted).IsRequired();
+
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
 
             // 5. MenuItems
@@ -88,11 +94,14 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.Price).HasPrecision(18, 2);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
+                entity.Property(e => e.IsDeleted).IsRequired();
              
                 entity.HasOne(e => e.Category)
                       .WithMany(c => c.MenuItems)
                       .HasForeignKey(e => e.CategoryId)
-                      .OnDelete(DeleteBehavior.Cascade);
+                      .OnDelete(DeleteBehavior.Restrict);
+                
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
 
             // 6. DeviceSession

@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
 
 namespace OrderingSystem.Infrastructure.Repositories
@@ -28,7 +29,10 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task DeleteTableAsync(Table table)
         {
-            _context.Tables.Remove(table);
+            table.IsDeleted = true;
+            table.Status = enTableStatus.Available; 
+
+            _context.Tables.Update(table);
             await _context.SaveChangesAsync();
         }
 

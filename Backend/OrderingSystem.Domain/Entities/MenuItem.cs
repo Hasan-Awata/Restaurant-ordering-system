@@ -14,6 +14,7 @@ namespace OrderingSystem.Domain.Entities
         public decimal Price { get; set; }
         public string ImageUrl { get; set; } = string.Empty;
         public bool IsAvailable { get; set; }
+        public bool IsDeleted { get; set; }
 
         // Navigation
         public Category Category { get; set; } = null!;

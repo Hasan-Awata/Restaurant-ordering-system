@@ -25,6 +25,8 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // 1. WRITE ENDPOINT (Command Path)
+
+        // ── CUSTOMER PATH: Scan the QR code ─────────────────────────────────────
         [HttpPost("qr")]
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
@@ -52,6 +54,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        // ── CASHIER PATH: Approve the activation request ────────────────────────
         [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
@@ -60,6 +63,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        // ── CUSTOMER PATH: Approve the guests ───────────────────────────────────
         [HttpPost("approve")]
         public async Task<IActionResult> ApproveGuest([FromBody] ApproveJoiningSessionRequest request)
         {

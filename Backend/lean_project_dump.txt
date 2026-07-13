@@ -877,6 +877,8 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // 1. WRITE ENDPOINT (Command Path)
+
+        // ── CUSTOMER PATH: Scan the QR code ─────────────────────────────────────
         [HttpPost("qr")]
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
@@ -904,6 +906,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        // ── CASHIER PATH: Approve the activation request ────────────────────────
         [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
@@ -912,6 +915,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        // ── CUSTOMER PATH: Approve the guests ───────────────────────────────────
         [HttpPost("approve")]
         public async Task<IActionResult> ApproveGuest([FromBody] ApproveJoiningSessionRequest request)
         {
@@ -970,7 +974,8 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Middlewar
 ----------------------------------------
 ﻿using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore; // Required for DbUpdateException
+using Microsoft.EntityFrameworkCore;
+using Npgsql; // Required to catch PostgreSQL-specific exceptions
 
 namespace OrderingSystem.WebApi.Middleware
 {
@@ -988,30 +993,67 @@ namespace OrderingSystem.WebApi.Middleware
             Exception exception,
             CancellationToken cancellationToken)
         {
-            // 1. Log the full exception for debugging
-            _logger.LogError(
-                exception, "An unhandled exception occurred: {Message}", exception.Message);
+            // 1. Define default response values for unexpected errors
+            int statusCode = StatusCodes.Status500InternalServerError;
+            string title = "Server Error";
+            string detail = "An unexpected error occurred while processing your request. Please try again later.";
 
-            // 2. Set up the default generic response
-            var problemDetails = new ProblemDetails
+            // 2. Map the exception to the appropriate HTTP status and message
+            switch (exception)
             {
-                Status = StatusCodes.Status500InternalServerError,
-                Title = "Server Error",
-                Detail = "An unexpected error occurred while processing your request. Please try again later."
-            };
+                // Caught FIRST: Concurrency conflicts (Two users editing the same record)
+                case DbUpdateConcurrencyException concurrencyEx:
+                    statusCode = StatusCodes.Status409Conflict;
+                    title = "Concurrency Conflict";
+                    detail = "The record you attempted to edit was modified by another process. Please refresh and try again.";
+                    _logger.LogWarning(concurrencyEx, "Concurrency conflict detected.");
+                    break;
 
-            // 3. Catch EF Core database update/constraint exceptions
-            if (exception is DbUpdateException dbUpdateEx)
-            {
-                problemDetails.Status = StatusCodes.Status409Conflict;
-                problemDetails.Title = "Database Constraint Violation";
+                // Caught SECOND: General database constraint violations (e.g., Foreign Key deletion failures)
+                case DbUpdateException dbUpdateEx:
+                    statusCode = StatusCodes.Status409Conflict;
+                    title = "Database Constraint Violation";
+                    detail = dbUpdateEx.InnerException?.Message ?? dbUpdateEx.Message;
+                    _logger.LogWarning(dbUpdateEx, "Database constraint violation.");
+                    break;
 
-                // The actual PostgreSQL constraint violation message is usually in the InnerException
-                problemDetails.Detail = dbUpdateEx.InnerException?.Message ?? dbUpdateEx.Message;
+                // Caught THIRD: Client disconnected or request timed out
+                case OperationCanceledException canceledEx:
+                    statusCode = 499; // 499 is the standard Nginx code for "Client Closed Request"
+                    title = "Request Canceled";
+                    detail = "The client canceled the request before the server could complete it.";
+
+                    // Log as Information instead of Error to avoid cluttering logs with false alarms
+                    _logger.LogInformation("Request was canceled by the client.");
+                    break;
+
+                // Caught FOURTH: PostgreSQL server connectivity issues
+                case PostgresException pgEx:
+                case NpgsqlException npgsqlEx:
+                    statusCode = StatusCodes.Status500InternalServerError;
+                    title = "Database Connection Error";
+                    detail = "Unable to communicate with the database. Please try again later.";
+
+                    // Log the critical system failure, but hide the details from the user
+                    _logger.LogError(exception, "A database connectivity error occurred.");
+                    break;
+
+                // DEFAULT: Anything else (NullReferenceExceptions, etc.)
+                default:
+                    _logger.LogError(exception, "An unhandled exception occurred: {Message}", exception.Message);
+                    break;
             }
 
-            // 4. Write the response
-            httpContext.Response.StatusCode = problemDetails.Status.Value;
+            // 3. Construct the standardized ProblemDetails object
+            var problemDetails = new ProblemDetails
+            {
+                Status = statusCode,
+                Title = title,
+                Detail = detail
+            };
+
+            // 4. Write the response back to the client
+            httpContext.Response.StatusCode = statusCode;
             await httpContext.Response.WriteAsJsonAsync(problemDetails, cancellationToken);
 
             return true;
@@ -2989,6 +3031,7 @@ namespace OrderingSystem.Domain.Entities
         public string NameAr { get; set; } = string.Empty;
         public string NameEn { get; set; } = string.Empty;
         public bool IsAvailable { get; set; }
+        public bool IsDeleted { get; set; }
 
         // Navigation
         public ICollection<MenuItem> MenuItems { get; set; } = new List<MenuItem>();
@@ -3039,6 +3082,7 @@ namespace OrderingSystem.Domain.Entities
         public decimal Price { get; set; }
         public string ImageUrl { get; set; } = string.Empty;
         public bool IsAvailable { get; set; }
+        public bool IsDeleted { get; set; }
 
         // Navigation
         public Category Category { get; set; } = null!;
@@ -3116,6 +3160,7 @@ namespace OrderingSystem.Domain.Entities
         public int FloorNumber { get; set; }
         public string QrCode { get; set; } = string.Empty;
         public enTableStatus Status { get; set; }
+        public bool IsDeleted { get; set; }
 
         // Navigation
         public ICollection<TableSession> Sessions { get; set; } = new List<TableSession>();
@@ -3372,6 +3417,7 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.FloorNumber).IsRequired();
                 entity.Property(e => e.Status).IsRequired();
                 entity.Property(e => e.QrCode).IsRequired().HasMaxLength(255);
+                entity.Property(e => e.IsDeleted).IsRequired();
 
                 entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
                       .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
@@ -3381,6 +3427,8 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithOne(ts => ts.Table)
                       .HasForeignKey(ts => ts.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
 
             // 3. TableSessions
@@ -3404,6 +3452,9 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.HasKey(e => e.CategoryId);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
+                entity.Property(e => e.IsDeleted).IsRequired();
+
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
 
             // 5. MenuItems
@@ -3413,11 +3464,14 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.Price).HasPrecision(18, 2);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
+                entity.Property(e => e.IsDeleted).IsRequired();
              
                 entity.HasOne(e => e.Category)
                       .WithMany(c => c.MenuItems)
                       .HasForeignKey(e => e.CategoryId)
-                      .OnDelete(DeleteBehavior.Cascade);
+                      .OnDelete(DeleteBehavior.Restrict);
+                
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
 
             // 6. DeviceSession
@@ -7345,12 +7399,12 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task<bool> DeleteCategoryAsync(Category category)
         {
-            if (category == null)
-            {
-                return false;
-            }
+            if (category == null) return false;
 
-            _dbContext.Categories.Remove(category);
+            category.IsDeleted = true;
+            category.IsAvailable = false; 
+
+            _dbContext.Categories.Update(category);
             await _dbContext.SaveChangesAsync();
             return true;
         }
@@ -7453,12 +7507,13 @@ namespace OrderingSystem.Infrastructure.Repositories
         }
         public async Task<bool> DeleteMenuItemAsync(MenuItem menuItem)
         {
-            _dbContext.MenuItems.Remove(menuItem);
+            if (menuItem == null) return false;
+
+            menuItem.IsDeleted = true;
+            menuItem.IsAvailable = false;
+
+            _dbContext.MenuItems.Update(menuItem);
             await _dbContext.SaveChangesAsync();
-           if(menuItem == null)
-            {
-                return false;
-            }
             return true;
         }
 
@@ -7543,6 +7598,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastru
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
 
 namespace OrderingSystem.Infrastructure.Repositories
@@ -7570,7 +7626,10 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task DeleteTableAsync(Table table)
         {
-            _context.Tables.Remove(table);
+            table.IsDeleted = true;
+            table.Status = enTableStatus.Available; 
+
+            _context.Tables.Update(table);
             await _context.SaveChangesAsync();
         }
 

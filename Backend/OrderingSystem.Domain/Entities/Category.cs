@@ -10,6 +10,7 @@ namespace OrderingSystem.Domain.Entities
         public string NameAr { get; set; } = string.Empty;
         public string NameEn { get; set; } = string.Empty;
         public bool IsAvailable { get; set; }
+        public bool IsDeleted { get; set; }
 
         // Navigation
         public ICollection<MenuItem> MenuItems { get; set; } = new List<MenuItem>();

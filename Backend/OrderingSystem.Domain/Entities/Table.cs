@@ -12,6 +12,7 @@ namespace OrderingSystem.Domain.Entities
         public int FloorNumber { get; set; }
         public string QrCode { get; set; } = string.Empty;
         public enTableStatus Status { get; set; }
+        public bool IsDeleted { get; set; }
 
         // Navigation
         public ICollection<TableSession> Sessions { get; set; } = new List<TableSession>();
