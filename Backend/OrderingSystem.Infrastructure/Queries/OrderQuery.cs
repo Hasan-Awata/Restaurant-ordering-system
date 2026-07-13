@@ -41,8 +41,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     o.CreatedAt,
                     o.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
                         oi.MenuItemId,
-                        oi.MenuItem.NameEn,
-                        oi.MenuItem.NameAr,
+                        oi.MenuItem != null ? oi.MenuItem.NameEn : "Deleted Item", // Safe null check
+                        oi.MenuItem != null ? oi.MenuItem.NameAr : "عنصر محذوف",  // Safe null check
                         oi.Quantity,
                         oi.UnitPrice,
                         oi.Notes
