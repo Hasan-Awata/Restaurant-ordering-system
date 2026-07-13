@@ -75,16 +75,34 @@ namespace OrderingSystem.WebApi.Controllers.Base
         // ── Helper: Unified Error Mapping ─────────────────────────────────
         private IActionResult MapError(enErrorType errorType, string? errorMessage)
         {
-            return errorType switch
+            var statusCode = errorType switch
             {
-                enErrorType.Validation => BadRequest(new { error = errorMessage }),
-                enErrorType.NotFound => NotFound(new { error = errorMessage }),
-                enErrorType.Conflict => Conflict(new { error = errorMessage }),
-                enErrorType.Unauthorized => Unauthorized(new { error = errorMessage }),
-                enErrorType.BalanceViolation => UnprocessableEntity(new { error = errorMessage }),
-                enErrorType.Failure => StatusCode(StatusCodes.Status500InternalServerError, new { error = errorMessage }),
-                _ => StatusCode(StatusCodes.Status500InternalServerError, new { error = "An unexpected error occurred." })
+                enErrorType.Validation => StatusCodes.Status400BadRequest,
+                enErrorType.NotFound => StatusCodes.Status404NotFound,
+                enErrorType.Conflict => StatusCodes.Status409Conflict,
+                enErrorType.Unauthorized => StatusCodes.Status401Unauthorized,
+                enErrorType.BalanceViolation => StatusCodes.Status422UnprocessableEntity,
+                enErrorType.Failure => StatusCodes.Status500InternalServerError,
+                _ => StatusCodes.Status500InternalServerError
             };
+
+            var title = errorType switch
+            {
+                enErrorType.Validation => "Validation Error",
+                enErrorType.NotFound => "Resource Not Found",
+                enErrorType.Conflict => "Conflict",
+                enErrorType.Unauthorized => "Unauthorized",
+                enErrorType.BalanceViolation => "Business Rule Violation",
+                enErrorType.Failure => "Server Error",
+                _ => "An unexpected error occurred"
+            };
+
+            // The Problem() method automatically formats the response as a standard application/problem+json ProblemDetails object
+            return Problem(
+                statusCode: statusCode,
+                title: title,
+                detail: errorMessage
+            );
         }
     }
 }
