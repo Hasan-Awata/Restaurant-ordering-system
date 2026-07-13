@@ -67,6 +67,38 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        // ── CUSTOMER PATH: Request the bill ─────────────────────────────────────
+        [HttpPost("request-bill")]
+        public async Task<IActionResult> RequestBill([FromBody] RequestBillRequest request)
+        {
+            if (!CurrentDeviceSessionId.HasValue)
+            {
+                return Unauthorized(new { error = "Invalid or missing device session." });
+            }
+
+            var result = await _sessionCommandService.RequestBillAsync(request.TableSessionId, CurrentDeviceSessionId.Value);
+            return HandleResult(result);
+        }
+
+        // ── CASHIER PATH: Approve the bill ──────────────────────────────────────
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("approve-bill")]
+        public async Task<IActionResult> ApproveBill([FromBody] ApproveBillRequest request)
+        {
+            var result = await _sessionCommandService.ApproveBillAsync(request.TableSessionId);
+            return HandleResult(result);
+        }
+
+        // ── CASHIER PATH: Close session after payment ───────────────────────────
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("end")]
+        public async Task<IActionResult> EndTableSession([FromBody] ActivateTableSessionRequest request)
+        {
+            // Reusing ActivateTableSessionRequest since it only contains the TableSessionId
+            var result = await _sessionCommandService.EndTableSessionAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
         // 2. READ ENDPOINT (Query Path)
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("active/{tableId}")]

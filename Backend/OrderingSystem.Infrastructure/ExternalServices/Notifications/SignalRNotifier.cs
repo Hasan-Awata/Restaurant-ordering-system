@@ -61,5 +61,18 @@ namespace OrderingSystem.Infrastructure.Notifications
             await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
                 .ReceiveOrderStatusUpdate(orderId, enOrderStatus.Cancelled, $"Order #{orderId} was cancelled by the customer.");
         }
+
+        public async Task NotifyCashiersOfBillRequestAsync(Guid tableSessionId, int tableNumber)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveBillRequestNotification(tableSessionId, tableNumber, $"Table {tableNumber} is requesting the bill.");
+        }
+
+        public async Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId)
+        {
+            // Broadcast to the entire table session group so all devices at the table know the bill is ready
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveBillApprovalNotification("Your bill has been prepared and approved by the cashier.");
+        }
     }
 }

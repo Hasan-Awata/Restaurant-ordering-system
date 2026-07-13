@@ -11,7 +11,8 @@ namespace OrderingSystem.Application.DTOs
     public record ApproveJoiningSessionRequest(Guid deviceSessionId);
     public record ActivateTableSessionRequest(Guid tableSessionId); 
     public record DeactivateSessionByAdminRequest(int TableId);
-
+    public record RequestBillRequest(Guid TableSessionId);
+    public record ApproveBillRequest(Guid TableSessionId);
 
     // Query/Command Response Payloads
     public record DeviceSessionResponse(Guid DeviceSessionId, enDeviceRole DeviceRole, bool IsApproved);

@@ -13,5 +13,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
         public Task<Result<TableSessionResponse>> ActivateTableSessionAsync(ActivateTableSessionRequest request);
         public Task<Result> DeactivateTableSessionAsync(Guid tableSessionId);
         public Task<Result<SessionResponse>> EndTableSessionAsync(Guid tableSessionId);
+        public Task<Result> RequestBillAsync(Guid tableSessionId, Guid deviceSessionId);
+        public Task<Result> ApproveBillAsync(Guid tableSessionId);
     }
 }

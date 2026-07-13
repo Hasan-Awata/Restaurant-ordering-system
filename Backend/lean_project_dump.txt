@@ -171,8 +171,13 @@ builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
         b => b.MigrationsAssembly(typeof(OrderingSystemDbContext).Assembly.FullName)));
 
 // ── Dependency Injections ──────────────────────────────────────────────────
+// Register the Global Exception Handler and standard Problem Details
+builder.Services.AddExceptionHandler<OrderingSystem.WebApi.Middleware.GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
 builder.Services.AddSignalR();
 builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
+
 builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
 builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
 builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
@@ -264,6 +269,9 @@ builder.Services.AddCors(options =>
 
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
+
+app.UseExceptionHandler();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -911,6 +919,38 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        // ── CUSTOMER PATH: Request the bill ─────────────────────────────────────
+        [HttpPost("request-bill")]
+        public async Task<IActionResult> RequestBill([FromBody] RequestBillRequest request)
+        {
+            if (!CurrentDeviceSessionId.HasValue)
+            {
+                return Unauthorized(new { error = "Invalid or missing device session." });
+            }
+
+            var result = await _sessionCommandService.RequestBillAsync(request.TableSessionId, CurrentDeviceSessionId.Value);
+            return HandleResult(result);
+        }
+
+        // ── CASHIER PATH: Approve the bill ──────────────────────────────────────
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("approve-bill")]
+        public async Task<IActionResult> ApproveBill([FromBody] ApproveBillRequest request)
+        {
+            var result = await _sessionCommandService.ApproveBillAsync(request.TableSessionId);
+            return HandleResult(result);
+        }
+
+        // ── CASHIER PATH: Close session after payment ───────────────────────────
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("end")]
+        public async Task<IActionResult> EndTableSession([FromBody] ActivateTableSessionRequest request)
+        {
+            // Reusing ActivateTableSessionRequest since it only contains the TableSessionId
+            var result = await _sessionCommandService.EndTableSessionAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
         // 2. READ ENDPOINT (Query Path)
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("active/{tableId}")]
@@ -921,6 +961,60 @@ namespace OrderingSystem.WebApi.Controllers
             if (response == null) return NotFound(new { error = $"No active session found for table ID {tableId}." });
 
             return Ok(response);
+        }
+    }
+}
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Middleware\GlobalExceptionHandler.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore; // Required for DbUpdateException
+
+namespace OrderingSystem.WebApi.Middleware
+{
+    public class GlobalExceptionHandler : IExceptionHandler
+    {
+        private readonly ILogger<GlobalExceptionHandler> _logger;
+
+        public GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger)
+        {
+            _logger = logger;
+        }
+
+        public async ValueTask<bool> TryHandleAsync(
+            HttpContext httpContext,
+            Exception exception,
+            CancellationToken cancellationToken)
+        {
+            // 1. Log the full exception for debugging
+            _logger.LogError(
+                exception, "An unhandled exception occurred: {Message}", exception.Message);
+
+            // 2. Set up the default generic response
+            var problemDetails = new ProblemDetails
+            {
+                Status = StatusCodes.Status500InternalServerError,
+                Title = "Server Error",
+                Detail = "An unexpected error occurred while processing your request. Please try again later."
+            };
+
+            // 3. Catch EF Core database update/constraint exceptions
+            if (exception is DbUpdateException dbUpdateEx)
+            {
+                problemDetails.Status = StatusCodes.Status409Conflict;
+                problemDetails.Title = "Database Constraint Violation";
+
+                // The actual PostgreSQL constraint violation message is usually in the InnerException
+                problemDetails.Detail = dbUpdateEx.InnerException?.Message ?? dbUpdateEx.Message;
+            }
+
+            // 4. Write the response
+            httpContext.Response.StatusCode = problemDetails.Status.Value;
+            await httpContext.Response.WriteAsJsonAsync(problemDetails, cancellationToken);
+
+            return true;
         }
     }
 }
@@ -1105,10 +1199,10 @@ namespace OrderingSystem.Application.DTOs
     public class OrderRecords
     {
         public record CreateOrderRequest(int TableNumber, Guid TableSessionId, Guid DeviceSessionId, List<OrderItemRequest> Items);
-        public record OrderItemRequest(int MenuItemId, int Quantity);
+        public record OrderItemRequest(int MenuItemId, int Quantity, string Notes);
 
         public record OrderResponse(int OrderId, int TableNumber, decimal TotalAmount, enOrderStatus OrderStatus, DateTime CreatedAt, List<OrderItemResponse> Items);
-        public record OrderItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice);
+        public record OrderItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice, string Notes);
     }
 }
 
@@ -1128,7 +1222,8 @@ namespace OrderingSystem.Application.DTOs
     public record ApproveJoiningSessionRequest(Guid deviceSessionId);
     public record ActivateTableSessionRequest(Guid tableSessionId); 
     public record DeactivateSessionByAdminRequest(int TableId);
-
+    public record RequestBillRequest(Guid TableSessionId);
+    public record ApproveBillRequest(Guid TableSessionId);
 
     // Query/Command Response Payloads
     public record DeviceSessionResponse(Guid DeviceSessionId, enDeviceRole DeviceRole, bool IsApproved);
@@ -1428,6 +1523,8 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyCashierOfNewOrderAsync(int orderId, Guid tableSessionId);
         public Task NotifyCustomerOfOrderStatusAsync(Guid deviceSessionId, int orderId, enOrderStatus status);
         public Task NotifyCashiersOfCustomerCancellationAsync(int orderId, Guid tableSessionId);
+        public Task NotifyCashiersOfBillRequestAsync(Guid tableSessionId, int tableNumber);
+        public Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId);
     }
 }
 
@@ -1450,6 +1547,8 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveCashierApprovalNotification(Guid tableSessionId, string message);
         public Task ReceiveNewOrderNotification(int orderId, Guid tableSessionId, string message);
         public Task ReceiveOrderStatusUpdate(int orderId, enOrderStatus status, string message);
+        public Task ReceiveBillRequestNotification(Guid tableSessionId, int tableNumber, string message);
+        public Task ReceiveBillApprovalNotification(string message);
     }
 }
 
@@ -1578,6 +1677,8 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
         public Task<Result<TableSessionResponse>> ActivateTableSessionAsync(ActivateTableSessionRequest request);
         public Task<Result> DeactivateTableSessionAsync(Guid tableSessionId);
         public Task<Result<SessionResponse>> EndTableSessionAsync(Guid tableSessionId);
+        public Task<Result> RequestBillAsync(Guid tableSessionId, Guid deviceSessionId);
+        public Task<Result> ApproveBillAsync(Guid tableSessionId);
     }
 }
 
@@ -2345,7 +2446,8 @@ namespace OrderingSystem.Application.Services
                 {
                     MenuItemId = menuItem.MenuItemId,
                     Quantity = itemReq.Quantity,
-                    UnitPrice = menuItem.Price // Securely sourced from DB
+                    UnitPrice = menuItem.Price, // Securely sourced from DB
+                    Notes = itemReq.Notes
                 });
             }
 
@@ -2366,7 +2468,7 @@ namespace OrderingSystem.Application.Services
 
             // Construct Response
             var responseItems = order.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
-                oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.Quantity, oi.UnitPrice)).ToList();
+                oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.Quantity, oi.UnitPrice, oi.Notes)).ToList();
 
             var response = new OrderRecords.OrderResponse(order.OrderId, request.TableNumber, order.TotalAmount, order.OrderStatus, order.CreatedAt, responseItems);
             return Result<OrderRecords.OrderResponse>.Success(response);
@@ -2641,6 +2743,44 @@ namespace OrderingSystem.Application.Services
             }
 
             // Optional: Notify via SignalR that session is dropped
+            return Result.Success();
+        }
+
+        public async Task<Result> RequestBillAsync(Guid tableSessionId, Guid deviceSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            // Security check: Verify the device belongs to this table session
+            if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
+                return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+
+            // Notify the cashiers
+            await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
+
+            return Result.Success();
+        }
+
+        public async Task<Result> ApproveBillAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table == null)
+                return Result.Failure("Table not found.", enErrorType.NotFound);
+
+            // Change table status to Billing
+            table.Status = enTableStatus.Billing;
+            await _tableRepository.UpdateTableAsync(table);
+
+            // Notify the customer
+            await _notifier.NotifyCustomerOfBillApprovalAsync(tableSessionId);
+
             return Result.Success();
         }
 
@@ -2950,6 +3090,7 @@ namespace OrderingSystem.Domain.Entities
         public int MenuItemId { get; set; }
         public int Quantity { get; set; }
         public decimal UnitPrice { get; set; }
+        public string Notes { get; set; } = "";
 
         // Navigation
         public Order Order { get; set; } = null!;
@@ -3316,6 +3457,7 @@ namespace OrderingSystem.Infrastructure.Data
             {
                 entity.HasKey(e => e.OrderItemId);
                 entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
+                entity.Property(e => e.Notes);
 
                 entity.HasOne(e => e.Order)
                       .WithMany(o => o.OrderItems)
@@ -3396,6 +3538,19 @@ namespace OrderingSystem.Infrastructure.Notifications
             // Alert the cashiers that an order was dropped
             await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
                 .ReceiveOrderStatusUpdate(orderId, enOrderStatus.Cancelled, $"Order #{orderId} was cancelled by the customer.");
+        }
+
+        public async Task NotifyCashiersOfBillRequestAsync(Guid tableSessionId, int tableNumber)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveBillRequestNotification(tableSessionId, tableNumber, $"Table {tableNumber} is requesting the bill.");
+        }
+
+        public async Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId)
+        {
+            // Broadcast to the entire table session group so all devices at the table know the bill is ready
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveBillApprovalNotification("Your bill has been prepared and approved by the cashier.");
         }
     }
 }
@@ -5800,6 +5955,441 @@ namespace OrderingSystem.Infrastructure.Migrations
 
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260713080829_AddNotesPropertyToOrderItem.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    /// <inheritdoc />
+    public partial class AddNotesPropertyToOrderItem : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.AddColumn<string>(
+                name: "Notes",
+                table: "OrderItems",
+                type: "text",
+                nullable: false,
+                defaultValue: "");
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropColumn(
+                name: "Notes",
+                table: "OrderItems");
+        }
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260713080829_AddNotesPropertyToOrderItem.Designer.cs
+----------------------------------------
+﻿// <auto-generated />
+using System;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+using OrderingSystem.Infrastructure.Data;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    [DbContext(typeof(OrderingSystemDbContext))]
+    [Migration("20260713080829_AddNotesPropertyToOrderItem")]
+    partial class AddNotesPropertyToOrderItem
+    {
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+
+            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Property<int>("CategoryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("CategoryId"));
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.HasKey("CategoryId");
+
+                    b.ToTable("Categories");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Property<Guid>("DeviceSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsApproved")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("SessionDevices");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Property<int>("MenuItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("MenuItemId"));
+
+                    b.Property<int>("CategoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ImageUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<decimal>("Price")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("MenuItemId");
+
+                    b.HasIndex("CategoryId");
+
+                    b.ToTable("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Property<int>("OrderId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeviceSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("OrderStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("OrderId");
+
+                    b.HasIndex("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.Property<int>("OrderItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderItemId"));
+
+                    b.Property<int>("MenuItemId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("OrderId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("OrderItemId");
+
+                    b.HasIndex("MenuItemId");
+
+                    b.HasIndex("OrderId");
+
+                    b.ToTable("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Property<int>("TableId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TableId"));
+
+                    b.Property<int>("FloorNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("QrCode")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("TableId");
+
+                    b.ToTable("Tables");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Property<Guid>("TableSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableId")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("TableSessionId");
+
+                    b.HasIndex("TableId");
+
+                    b.ToTable("TableSessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
+                {
+                    b.Property<int>("UserId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("UserId"));
+
+                    b.Property<DateTime?>("AbsoluteRefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RefreshToken")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<DateTime?>("RefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "TableSession")
+                        .WithMany("Devices")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TableSession");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Category", "Category")
+                        .WithMany("MenuItems")
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.DeviceSession", "Device")
+                        .WithMany("Orders")
+                        .HasForeignKey("DeviceSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "Session")
+                        .WithMany("Orders")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.MenuItem", "MenuItem")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("MenuItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.Order", "Order")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("MenuItem");
+
+                    b.Navigation("Order");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Table", "Table")
+                        .WithMany("Sessions")
+                        .HasForeignKey("TableId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Table");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Navigation("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Navigation("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Navigation("Sessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Navigation("Devices");
+
+                    b.Navigation("Orders");
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\OrderingSystemDbContextModelSnapshot.cs
 ----------------------------------------
 ﻿// <auto-generated />
@@ -5966,6 +6556,10 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.Property<int>("MenuItemId")
                         .HasColumnType("integer");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<int>("OrderId")
                         .HasColumnType("integer");
@@ -6515,7 +7109,8 @@ namespace OrderingSystem.Infrastructure.Queries
                         oi.MenuItem.NameEn,
                         oi.MenuItem.NameAr,
                         oi.Quantity,
-                        oi.UnitPrice
+                        oi.UnitPrice,
+                        oi.Notes
                     )).ToList()
                 ))
                 .ToListAsync();

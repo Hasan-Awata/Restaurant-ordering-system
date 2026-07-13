@@ -209,6 +209,44 @@ namespace OrderingSystem.Application.Services
             return Result.Success();
         }
 
+        public async Task<Result> RequestBillAsync(Guid tableSessionId, Guid deviceSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            // Security check: Verify the device belongs to this table session
+            if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
+                return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+
+            // Notify the cashiers
+            await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
+
+            return Result.Success();
+        }
+
+        public async Task<Result> ApproveBillAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table == null)
+                return Result.Failure("Table not found.", enErrorType.NotFound);
+
+            // Change table status to Billing
+            table.Status = enTableStatus.Billing;
+            await _tableRepository.UpdateTableAsync(table);
+
+            // Notify the customer
+            await _notifier.NotifyCustomerOfBillApprovalAsync(tableSessionId);
+
+            return Result.Success();
+        }
+
         public async Task<Result<SessionResponse>> EndTableSessionAsync(Guid tableSessionId)
         {
             var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
