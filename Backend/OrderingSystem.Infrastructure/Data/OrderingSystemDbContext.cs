@@ -132,6 +132,7 @@ namespace OrderingSystem.Infrastructure.Data
             {
                 entity.HasKey(e => e.OrderItemId);
                 entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
+                entity.Property(e => e.Notes);
 
                 entity.HasOne(e => e.Order)
                       .WithMany(o => o.OrderItems)

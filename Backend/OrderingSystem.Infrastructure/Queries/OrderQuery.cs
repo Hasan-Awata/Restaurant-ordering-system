@@ -44,7 +44,8 @@ namespace OrderingSystem.Infrastructure.Queries
                         oi.MenuItem.NameEn,
                         oi.MenuItem.NameAr,
                         oi.Quantity,
-                        oi.UnitPrice
+                        oi.UnitPrice,
+                        oi.Notes
                     )).ToList()
                 ))
                 .ToListAsync();

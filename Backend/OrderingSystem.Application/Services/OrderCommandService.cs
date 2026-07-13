@@ -44,7 +44,8 @@ namespace OrderingSystem.Application.Services
                 {
                     MenuItemId = menuItem.MenuItemId,
                     Quantity = itemReq.Quantity,
-                    UnitPrice = menuItem.Price // Securely sourced from DB
+                    UnitPrice = menuItem.Price, // Securely sourced from DB
+                    Notes = itemReq.Notes
                 });
             }
 
@@ -65,7 +66,7 @@ namespace OrderingSystem.Application.Services
 
             // Construct Response
             var responseItems = order.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
-                oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.Quantity, oi.UnitPrice)).ToList();
+                oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.Quantity, oi.UnitPrice, oi.Notes)).ToList();
 
             var response = new OrderRecords.OrderResponse(order.OrderId, request.TableNumber, order.TotalAmount, order.OrderStatus, order.CreatedAt, responseItems);
             return Result<OrderRecords.OrderResponse>.Success(response);
