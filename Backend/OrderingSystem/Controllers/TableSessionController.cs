@@ -103,6 +103,17 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [HttpGet("{tableSessionId}/bill")]
+        public async Task<IActionResult> GetBillSummary(Guid tableSessionId)
+        {
+            var result = await _sessionQueryService.GetBillSummaryAsync(tableSessionId);
+
+            if (result == null)
+                return NotFound(new { error = $"No bill found for session ID {tableSessionId}." });
+
+            return Ok(result);
+        }
+
         // 2. READ ENDPOINT (Query Path)
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("active/{tableId}")]
