@@ -10,7 +10,7 @@ PROJECT_ROOT = r"C:\Users\ASUS\source\repos\OrderingSystem\Backend"
 OUTPUT_FILE = "Feature_Flow_Dump.txt"
 
 # The entry points of the feature (The script will trace downwards from here)
-ENTRY_FILES = ["TablesController.cs"]
+ENTRY_FILES = ["TableSessionController.cs"]
 
 IGNORE_DIRS = {
     ".git", ".vs", "bin", "obj", "node_modules", 

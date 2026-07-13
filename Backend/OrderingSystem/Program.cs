@@ -78,8 +78,13 @@ builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
         b => b.MigrationsAssembly(typeof(OrderingSystemDbContext).Assembly.FullName)));
 
 // ── Dependency Injections ──────────────────────────────────────────────────
+// Register the Global Exception Handler and standard Problem Details
+builder.Services.AddExceptionHandler<OrderingSystem.WebApi.Middleware.GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
 builder.Services.AddSignalR();
 builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
+
 builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
 builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
 builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
@@ -171,6 +176,9 @@ builder.Services.AddCors(options =>
 
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
+
+app.UseExceptionHandler();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
