@@ -45,13 +45,12 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
         {
-            // Extract the UserId cleanly using the BaseController property
-            if (!CurrentUserId.HasValue)
-            {
-                return Unauthorized(new { error = "Invalid token claims." });
-            }
+            if (!CurrentUserId.HasValue) return Unauthorized(new { error = "Invalid token claims." });
 
-            var result = await _authCommandService.LogoutAsync(CurrentUserId.Value);
+            // Extract the raw Bearer token from the header
+            var token = Request.Headers.Authorization.ToString().Replace("Bearer ", "").Trim();
+
+            var result = await _authCommandService.LogoutAsync(CurrentUserId.Value, token);
             return HandleResult(result);
         }
     }

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OrderingSystem.Application.Interfaces.Auth;
@@ -20,6 +21,7 @@ using OrderingSystem.Infrastructure.Notifications;
 using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
 using OrderingSystem.Infrastructure.Seeding;
+using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -37,19 +39,21 @@ builder.Services.AddControllers()
 // ── Rate Limiting ────────────────────────────────────────────────────────
 builder.Services.AddRateLimiter(options =>
 {
-    options.AddFixedWindowLimiter("Fixed", limiterOptions =>
+    options.AddPolicy("Fixed", httpContext =>
     {
-        limiterOptions.PermitLimit = 100;
-        limiterOptions.Window = TimeSpan.FromMinutes(1);
-        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        limiterOptions.QueueLimit = 2;
-    });
+        var partitionKey = httpContext.Request.Cookies["DeviceSessionId"] ??
+                           httpContext.Connection.RemoteIpAddress?.ToString() ??
+                           "unknown";
 
-    options.OnRejected = async (context, token) =>
-    {
-        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-        await context.HttpContext.Response.WriteAsync("Too many requests. Please try again later.", cancellationToken: token);
-    };
+        return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ =>
+            new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 2
+            });
+    });
 });
 
 // ── Swagger with JWT Bearer ───────────────────────────────────────────────
@@ -140,6 +144,20 @@ builder.Services.AddAuthentication(options =>
             {
                 // Tell the middleware to use this token for authentication
                 context.Token = accessToken;
+            }
+
+            return Task.CompletedTask;
+        },
+
+        OnTokenValidated = context =>
+        {
+            var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
+            var tokenString = context.SecurityToken is JwtSecurityToken jwt ? jwt.RawData : string.Empty;
+
+            // If the token is found in the cache, it's revoked. Reject the request.
+            if (!string.IsNullOrEmpty(tokenString) && cache.TryGetValue($"blacklist_{tokenString}", out _))
+            {
+                context.Fail("This token has been revoked.");
             }
 
             return Task.CompletedTask;

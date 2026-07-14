@@ -1,6 +1,9 @@
 ﻿using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
 using System.Security.Claims;
 
 namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
@@ -16,36 +19,52 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
 
         public override async Task OnConnectedAsync()
         {
-            // Example: Auto-assign authenticated staff to groups based on their JWT claims
-            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
+            var httpContext = Context.GetHttpContext();
+            bool isAuthenticated = false;
 
-            if (role == enRoleType.Cashier.ToString() || role == enRoleType.Admin.ToString())
+            // 1. Check JWT (Staff Authentication)
+            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
+            if (!string.IsNullOrEmpty(role))
             {
-                await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Cashiers);
+                isAuthenticated = true;
+                if (role == enRoleType.Cashier.ToString() || role == enRoleType.Admin.ToString())
+                    await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Cashiers);
+                else if (role == enRoleType.Waiter.ToString())
+                    await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Waiters);
             }
-            else if (role == enRoleType.Waiter.ToString())
+
+            // 2. Check Cookie (Customer Authentication)
+            if (!isAuthenticated && httpContext != null &&
+                httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var deviceIdStr) &&
+                Guid.TryParse(deviceIdStr, out var deviceSessionId))
             {
-                await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Waiters);
+                // SECURE LOOKUP: Use the trusted cookie to find the table session in the DB
+                var dbContext = httpContext.RequestServices.GetRequiredService<OrderingSystemDbContext>();
+
+                var deviceRecord = await dbContext.SessionDevices
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(d => d.DeviceSessionId == deviceSessionId);
+
+                if (deviceRecord != null)
+                {
+                    isAuthenticated = true;
+
+                    // Add to private device group (for personal order updates)
+                    await Groups.AddToGroupAsync(Context.ConnectionId, deviceSessionId.ToString());
+
+                    // Add to table group (for table-wide events like bill approvals)
+                    await Groups.AddToGroupAsync(Context.ConnectionId, deviceRecord.TableSessionId.ToString());
+                }
+            }
+
+            // 3. Reject unauthenticated or invalid connections completely
+            if (!isAuthenticated)
+            {
+                Context.Abort();
+                return;
             }
 
             await base.OnConnectedAsync();
-        }
-
-        // Table hosts/guests explicitly join a room for their specific session
-        public async Task JoinTableSessionGroup(Guid tableSessionId)
-        {
-            await Groups.AddToGroupAsync(Context.ConnectionId, tableSessionId.ToString());
-        }
-
-        public async Task LeaveTableSessionGroup(Guid tableSessionId)
-        {
-            await Groups.RemoveFromGroupAsync(Context.ConnectionId, tableSessionId.ToString());
-        }
-
-        // Similarly, target specific devices by their unique ID
-        public async Task RegisterDeviceGroup(Guid deviceSessionId)
-        {
-            await Groups.AddToGroupAsync(Context.ConnectionId, deviceSessionId.ToString());
         }
     }
 }

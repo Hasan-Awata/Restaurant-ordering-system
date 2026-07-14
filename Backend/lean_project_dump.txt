@@ -66,6 +66,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\OrderingS
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.9" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
 	<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
 	<PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.9" />
@@ -94,6 +95,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Program.c
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OrderingSystem.Application.Interfaces.Auth;
@@ -113,6 +115,7 @@ using OrderingSystem.Infrastructure.Notifications;
 using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
 using OrderingSystem.Infrastructure.Seeding;
+using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -130,19 +133,21 @@ builder.Services.AddControllers()
 // ── Rate Limiting ────────────────────────────────────────────────────────
 builder.Services.AddRateLimiter(options =>
 {
-    options.AddFixedWindowLimiter("Fixed", limiterOptions =>
+    options.AddPolicy("Fixed", httpContext =>
     {
-        limiterOptions.PermitLimit = 100;
-        limiterOptions.Window = TimeSpan.FromMinutes(1);
-        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        limiterOptions.QueueLimit = 2;
-    });
+        var partitionKey = httpContext.Request.Cookies["DeviceSessionId"] ??
+                           httpContext.Connection.RemoteIpAddress?.ToString() ??
+                           "unknown";
 
-    options.OnRejected = async (context, token) =>
-    {
-        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-        await context.HttpContext.Response.WriteAsync("Too many requests. Please try again later.", cancellationToken: token);
-    };
+        return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ =>
+            new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 2
+            });
+    });
 });
 
 // ── Swagger with JWT Bearer ───────────────────────────────────────────────
@@ -233,6 +238,20 @@ builder.Services.AddAuthentication(options =>
             {
                 // Tell the middleware to use this token for authentication
                 context.Token = accessToken;
+            }
+
+            return Task.CompletedTask;
+        },
+
+        OnTokenValidated = context =>
+        {
+            var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
+            var tokenString = context.SecurityToken is JwtSecurityToken jwt ? jwt.RawData : string.Empty;
+
+            // If the token is found in the cache, it's revoked. Reject the request.
+            if (!string.IsNullOrEmpty(tokenString) && cache.TryGetValue($"blacklist_{tokenString}", out _))
+            {
+                context.Fail("This token has been revoked.");
             }
 
             return Task.CompletedTask;
@@ -366,13 +385,12 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
         {
-            // Extract the UserId cleanly using the BaseController property
-            if (!CurrentUserId.HasValue)
-            {
-                return Unauthorized(new { error = "Invalid token claims." });
-            }
+            if (!CurrentUserId.HasValue) return Unauthorized(new { error = "Invalid token claims." });
 
-            var result = await _authCommandService.LogoutAsync(CurrentUserId.Value);
+            // Extract the raw Bearer token from the header
+            var token = Request.Headers.Authorization.ToString().Replace("Bearer ", "").Trim();
+
+            var result = await _authCommandService.LogoutAsync(CurrentUserId.Value, token);
             return HandleResult(result);
         }
     }
@@ -511,7 +529,8 @@ namespace OrderingSystem.WebApi.Controllers.Base
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\CategoriesController.cs
 ----------------------------------------
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.Category;
@@ -535,6 +554,7 @@ namespace OrderingSystem.WebApi.Controllers
             _categoryQueryService = categoryQueryService;
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpPost]
         public async Task<IActionResult> AddCategory([FromBody] CategoriesRecords.AddCategoryRequest request)
         {
@@ -547,6 +567,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpPut]
         public async Task<IActionResult> UpdateCategory([FromBody] CategoriesRecords.UpdateCategoryRequest request)
         {
@@ -554,6 +575,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpDelete]
         public async Task<IActionResult> DeleteCategory([FromBody] CategoriesRecords.DeleteCategoryRequest request)
         {
@@ -594,7 +616,8 @@ namespace OrderingSystem.WebApi.Controllers
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\MenueItemController.cs
 ----------------------------------------
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.MenueItem;
@@ -618,6 +641,7 @@ namespace OrderingSystem.WebApi.Controllers
             _menuItemQueryService = menuItemQueryService;
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpPost]
         public async Task<IActionResult> AddMenuItem([FromBody] MenuRecords.AddMenuItemRequest request)
         {
@@ -630,6 +654,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpPut]
         public async Task<IActionResult> UpdateMenuItem([FromBody] MenuRecords.UpdateMenuItemRequest request)
         {
@@ -637,6 +662,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpDelete]
         public async Task<IActionResult> DeleteMenuItem([FromBody] MenuRecords.DeleteMenuItemRequest request)
         {
@@ -955,7 +981,10 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost("approve")]
         public async Task<IActionResult> ApproveGuest([FromBody] ApproveJoiningSessionRequest request)
         {
-            var result = await _sessionCommandService.ApproveJoiningRequestAsync(request);
+            if (!CurrentDeviceSessionId.HasValue)
+                return Unauthorized(new { error = "Invalid or missing device session." });
+
+            var result = await _sessionCommandService.ApproveJoiningRequestAsync(request, CurrentDeviceSessionId.Value);
             return HandleResult(result);
         }
 
@@ -989,6 +1018,17 @@ namespace OrderingSystem.WebApi.Controllers
             // Reusing ActivateTableSessionRequest since it only contains the TableSessionId
             var result = await _sessionCommandService.EndTableSessionAsync(request.tableSessionId);
             return HandleResult(result);
+        }
+
+        [HttpGet("{tableSessionId}/bill")]
+        public async Task<IActionResult> GetBillSummary(Guid tableSessionId)
+        {
+            var result = await _sessionQueryService.GetBillSummaryAsync(tableSessionId);
+
+            if (result == null)
+                return NotFound(new { error = $"No bill found for session ID {tableSessionId}." });
+
+            return Ok(result);
         }
 
         // 2. READ ENDPOINT (Query Path)
@@ -1049,8 +1089,44 @@ namespace OrderingSystem.WebApi.Middleware
                 case DbUpdateException dbUpdateEx:
                     statusCode = StatusCodes.Status409Conflict;
                     title = "Database Constraint Violation";
-                    detail = dbUpdateEx.InnerException?.Message ?? dbUpdateEx.Message;
-                    _logger.LogWarning(dbUpdateEx, "Database constraint violation.");
+
+                    // 1. Check if the underlying database threw a Postgres-specific exception
+                    if (dbUpdateEx.InnerException is PostgresException pgEx)
+                    {
+                        // 2. Map the specific PostgreSQL state code to a safe, precise business message
+                        detail = pgEx.SqlState switch
+                        {
+                            // 23505: unique_violation
+                            PostgresErrorCodes.UniqueViolation => "A record with this information already exists.",
+
+                            // 23503: foreign_key_violation
+                            PostgresErrorCodes.ForeignKeyViolation => "This operation failed because the record is either currently in use or references missing data.",
+
+                            // 23514: check_violation
+                            PostgresErrorCodes.CheckViolation => "The provided data violates a business rule constraint.",
+
+                            // 23502: not_null_violation
+                            PostgresErrorCodes.NotNullViolation => "A required piece of information was missing.",
+
+                            _ => "A database constraint was violated."
+                        };
+
+                        // Optional: If you want absolute precision, you can safely map specific constraint names
+                        // without exposing them to the client.
+                        if (pgEx.ConstraintName == "IX_TableSessions_TableId")
+                        {
+                            detail = "This table already has an active session.";
+                        }
+
+                        // Log the actual sensitive data securely on the server
+                        _logger.LogWarning(dbUpdateEx, "Database constraint violation. SqlState: {SqlState}, Constraint: {ConstraintName}", pgEx.SqlState, pgEx.ConstraintName);
+                    }
+                    else
+                    {
+                        // Fallback for non-Postgres DbUpdateExceptions
+                        detail = "A data conflict occurred while processing your request.";
+                        _logger.LogWarning(dbUpdateEx, "Database constraint violation (Non-Postgres).");
+                    }
                     break;
 
                 // Caught THIRD: Client disconnected or request timed out
@@ -1064,7 +1140,6 @@ namespace OrderingSystem.WebApi.Middleware
                     break;
 
                 // Caught FOURTH: PostgreSQL server connectivity issues
-                case PostgresException pgEx:
                 case NpgsqlException npgsqlEx:
                     statusCode = StatusCodes.Status500InternalServerError;
                     title = "Database Connection Error";
@@ -1148,6 +1223,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.9" />
     <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.0.1" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.1" />
@@ -1313,10 +1389,20 @@ namespace OrderingSystem.Application.DTOs
     public record RequestBillRequest([Required] Guid TableSessionId);
     public record ApproveBillRequest([Required] Guid TableSessionId);
 
+
     // Query/Command Response Payloads
     public record DeviceSessionResponse(Guid DeviceSessionId, enDeviceRole DeviceRole, bool IsApproved);
     public record TableSessionResponse(Guid TableSessionId, int TableNumber, enSessionStatus Status, DateTime CreatedAt);
     public record SessionResponse(TableSessionResponse TableSession, DeviceSessionResponse? DeviceSession);
+    public record BillItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice, decimal TotalPrice);
+    public record GuestBillResponse(Guid DeviceSessionId, enDeviceRole Role, List<BillItemResponse> Items, decimal SubTotal);
+    public record BillSummaryResponse(
+        Guid TableSessionId,
+        List<GuestBillResponse> GuestBills,
+        decimal TotalSubTotal,
+        decimal TaxAmount,
+        decimal GrandTotal
+    );
 }
 
 
@@ -1411,7 +1497,7 @@ namespace OrderingSystem.Application.Interfaces.Authentication
     public interface IAuthCommandService
     {
         Task<Result<LoginResponse>> LoginAsync(LoginRequest request);
-        Task<Result> LogoutAsync(int userId);
+        Task<Result> LogoutAsync(int userId, string token);
         Task<Result<UserResponse>> CreateUserAsync(CreateUserRequest request);
         Task<Result<LoginResponse>> RefreshTokenAsync(RefreshTokenRequest request);
     }
@@ -1768,7 +1854,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
     public interface ISessionCommandService
     {
         public Task<Result<SessionResponse>> ProcessTableQrCodeAsync(string qrCode, Guid? deviceSessionId = null);
-        public Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request);
+        public Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request, Guid deviceSessionId);
         public Task<Result<TableSessionResponse>> ActivateTableSessionAsync(ActivateTableSessionRequest request);
         public Task<Result> DeactivateTableSessionAsync(Guid tableSessionId);
         public Task<Result<SessionResponse>> EndTableSessionAsync(Guid tableSessionId);
@@ -1792,6 +1878,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
     public interface ITableSessionQuery
     {
         public Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId);
+        public Task<BillSummaryResponse?> GetBillSummaryAsync(Guid tableSessionId);
     }
 }
 
@@ -2023,18 +2110,21 @@ using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.IdentityModel.Tokens;
 namespace OrderingSystem.Application.Services
 {
     public class AuthCommandService : IAuthCommandService
     {
         private readonly IUserRepository _userRepository;
         private readonly IJwtProvider _jwtProvider;
+        private readonly IMemoryCache _cache;
 
-        public AuthCommandService(IUserRepository userRepository, IJwtProvider jwtProvider)
+        public AuthCommandService(IUserRepository userRepository, IJwtProvider jwtProvider, IMemoryCache cache)
         {
             _userRepository = userRepository;
             _jwtProvider = jwtProvider;
+            _cache = cache;
         }
 
         public async Task<Result<LoginResponse>> LoginAsync(LoginRequest request)
@@ -2118,21 +2208,18 @@ namespace OrderingSystem.Application.Services
             return Result<UserResponse>.Success(response);
         }
 
-        public async Task<Result> LogoutAsync(int userId)
+        public async Task<Result> LogoutAsync(int userId, string token)
         {
             var user = await _userRepository.GetUserByIdAsync(userId);
+            if (user == null) return Result.Failure("User not found.", enErrorType.NotFound);
 
-            if (user == null)
-            {
-                return Result.Failure("User not found.", enErrorType.NotFound);
-            }
-
-            // Revoke the tokens
             user.RefreshToken = null;
             user.RefreshTokenExpiryTime = null;
             user.AbsoluteRefreshTokenExpiryTime = null;
-
             await _userRepository.UpdateUserAsync(user);
+
+            // Add the token to the blacklist cache for 15 minutes (matching token lifespan)
+            _cache.Set($"blacklist_{token}", true, TimeSpan.FromMinutes(15));
 
             return Result.Success();
         }
@@ -2807,21 +2894,28 @@ namespace OrderingSystem.Application.Services
             return Result<TableSessionResponse>.Success(session.ToResponse());
         }
 
-        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request)
+        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request, Guid hostDeviceSessionId)
         {
-            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.deviceSessionId);
-
-            if (deviceSession == null)
-            {
+            var guestDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.deviceSessionId);
+            if (guestDeviceSession == null)
                 return Result<SessionResponse>.Failure("Device session not found.", enErrorType.NotFound);
+
+            // Fetch the host's session to verify authority
+            var hostDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(hostDeviceSessionId);
+
+            // Validate role and table session match
+            if (hostDeviceSession == null ||
+                hostDeviceSession.Role != enDeviceRole.Host ||
+                hostDeviceSession.TableSessionId != guestDeviceSession.TableSessionId)
+            {
+                return Result<SessionResponse>.Failure("Unauthorized to approve guests for this table.", enErrorType.Unauthorized);
             }
 
-            deviceSession.IsApproved = true;
-            await _deviceSessionRepository.UpdateDeviceSessionAsync(deviceSession);
+            guestDeviceSession.IsApproved = true;
+            await _deviceSessionRepository.UpdateDeviceSessionAsync(guestDeviceSession);
+            await _notifier.NotifyGuestOfApprovalAsync(guestDeviceSession.DeviceSessionId);
 
-            await _notifier.NotifyGuestOfApprovalAsync(deviceSession.DeviceSessionId);
-
-            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));
+            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(guestDeviceSession.TableSession, guestDeviceSession));
         }
 
         public async Task<Result> DeactivateTableSessionAsync(Guid tableSessionId)
@@ -2938,6 +3032,7 @@ using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
+using System.Security.Cryptography;
 
 namespace OrderingSystem.Application.Services
 {
@@ -2971,7 +3066,7 @@ namespace OrderingSystem.Application.Services
             }
 
             // Generate unique QR Code payload
-            string uniqueSegment = Guid.CreateVersion7().ToString()[..8];
+            string uniqueSegment = RandomNumberGenerator.GetHexString(4);
             string generatedQrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{uniqueSegment}".ToUpper();
 
             var newTable = new Table
@@ -3034,13 +3129,31 @@ namespace OrderingSystem.Application.Services
             return Result.Success();
         }
 
+        public async Task<Result<TableResponse>> RegenerateQrCode(int tableId)
+        {
+            var table = await _tableRepository.GetTableByIdAsync(tableId);
+            if (table == null)
+            {
+                return Result<TableResponse>.Failure("Table was not found.", enErrorType.NotFound);
+            }
+
+            // Regenerate the QR Code for security so old printed codes become invalid
+            string newUniqueSegment = RandomNumberGenerator.GetHexString(4);
+            table.QrCode = $"TBL-F{table.FloorNumber}-N{table.TableNumber}-{newUniqueSegment}".ToUpper();
+
+            await _tableRepository.UpdateTableAsync(table);
+
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status);
+            return Result<TableResponse>.Success(response);
+        }
+
         private async Task<TableResponse> RestoreTableAsync(Table existingTable, AddTableRequest request)
         {
             existingTable.IsDeleted = false;
             existingTable.Status = enTableStatus.Available;
 
             // Regenerate the QR Code for security so old printed codes become invalid
-            string newUniqueSegment = Guid.CreateVersion7().ToString()[..8];
+            string newUniqueSegment = RandomNumberGenerator.GetHexString(4);
             existingTable.QrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{newUniqueSegment}".ToUpper();
 
             await _tableRepository.UpdateTableAsync(existingTable);
@@ -3468,6 +3581,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastru
 ----------------------------------------
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 
 namespace OrderingSystem.Infrastructure.Data
 {
@@ -3602,6 +3716,9 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(d => d.Orders)
                       .HasForeignKey(e => e.DeviceSessionId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasQueryFilter(e => e.OrderStatus != enOrderStatus.Cancelled);
+
             });
 
             // 8. OrderItems
@@ -3711,8 +3828,11 @@ namespace OrderingSystem.Infrastructure.Notifications
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\ExternalServices\Notifications\TableSessionNotificationsHub.cs
 ----------------------------------------
 ﻿using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
 using System.Security.Claims;
 
 namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
@@ -3728,36 +3848,52 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
 
         public override async Task OnConnectedAsync()
         {
-            // Example: Auto-assign authenticated staff to groups based on their JWT claims
-            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
+            var httpContext = Context.GetHttpContext();
+            bool isAuthenticated = false;
 
-            if (role == enRoleType.Cashier.ToString() || role == enRoleType.Admin.ToString())
+            // 1. Check JWT (Staff Authentication)
+            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
+            if (!string.IsNullOrEmpty(role))
             {
-                await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Cashiers);
+                isAuthenticated = true;
+                if (role == enRoleType.Cashier.ToString() || role == enRoleType.Admin.ToString())
+                    await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Cashiers);
+                else if (role == enRoleType.Waiter.ToString())
+                    await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Waiters);
             }
-            else if (role == enRoleType.Waiter.ToString())
+
+            // 2. Check Cookie (Customer Authentication)
+            if (!isAuthenticated && httpContext != null &&
+                httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var deviceIdStr) &&
+                Guid.TryParse(deviceIdStr, out var deviceSessionId))
             {
-                await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Waiters);
+                // SECURE LOOKUP: Use the trusted cookie to find the table session in the DB
+                var dbContext = httpContext.RequestServices.GetRequiredService<OrderingSystemDbContext>();
+
+                var deviceRecord = await dbContext.SessionDevices
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(d => d.DeviceSessionId == deviceSessionId);
+
+                if (deviceRecord != null)
+                {
+                    isAuthenticated = true;
+
+                    // Add to private device group (for personal order updates)
+                    await Groups.AddToGroupAsync(Context.ConnectionId, deviceSessionId.ToString());
+
+                    // Add to table group (for table-wide events like bill approvals)
+                    await Groups.AddToGroupAsync(Context.ConnectionId, deviceRecord.TableSessionId.ToString());
+                }
+            }
+
+            // 3. Reject unauthenticated or invalid connections completely
+            if (!isAuthenticated)
+            {
+                Context.Abort();
+                return;
             }
 
             await base.OnConnectedAsync();
-        }
-
-        // Table hosts/guests explicitly join a room for their specific session
-        public async Task JoinTableSessionGroup(Guid tableSessionId)
-        {
-            await Groups.AddToGroupAsync(Context.ConnectionId, tableSessionId.ToString());
-        }
-
-        public async Task LeaveTableSessionGroup(Guid tableSessionId)
-        {
-            await Groups.RemoveFromGroupAsync(Context.ConnectionId, tableSessionId.ToString());
-        }
-
-        // Similarly, target specific devices by their unique ID
-        public async Task RegisterDeviceGroup(Guid deviceSessionId)
-        {
-            await Groups.AddToGroupAsync(Context.ConnectionId, deviceSessionId.ToString());
         }
     }
 }
@@ -7954,6 +8090,59 @@ namespace OrderingSystem.Infrastructure.Queries
                     ))
                     .FirstOrDefaultAsync();
         }
+
+        public async Task<BillSummaryResponse?> GetBillSummaryAsync(Guid tableSessionId)
+        {
+            var session = await _context.TableSessions
+                .AsNoTracking()
+                .Include(s => s.Devices)
+                .Include(s => s.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled))
+                    .ThenInclude(o => o.OrderItems)
+                        .ThenInclude(oi => oi.MenuItem)
+                .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId);
+
+            if (session == null) return null;
+
+            var guestBills = new List<GuestBillResponse>();
+            decimal totalSubTotal = 0;
+
+            foreach (var device in session.Devices)
+            {
+                var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
+                if (!deviceOrders.Any()) continue;
+
+                // Flatten items for this device, group by MenuItemId to sum quantities of identical items
+                var groupedItems = deviceOrders
+                    .SelectMany(o => o.OrderItems)
+                    .GroupBy(oi => oi.MenuItemId)
+                    .Select(g => new BillItemResponse(
+                        g.Key,
+                        g.First().MenuItem?.NameEn ?? "Deleted Item",
+                        g.First().MenuItem?.NameAr ?? "عنصر محذوف",
+                        g.Sum(oi => oi.Quantity),
+                        g.First().UnitPrice, // Using the historical price saved on the OrderItem
+                        g.Sum(oi => oi.Quantity * oi.UnitPrice)
+                    )).ToList();
+
+                decimal subTotal = groupedItems.Sum(i => i.TotalPrice);
+                totalSubTotal += subTotal;
+
+                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, groupedItems, subTotal));
+            }
+
+            // TODO: Replace this with an actual database fetch from the future Taxes table
+            decimal taxRate = 0.15m;
+            decimal taxAmount = totalSubTotal * taxRate;
+            decimal grandTotal = totalSubTotal + taxAmount;
+
+            return new BillSummaryResponse(
+                session.TableSessionId,
+                guestBills,
+                totalSubTotal,
+                taxAmount,
+                grandTotal
+            );
+        }
     }
 }
 
@@ -8160,8 +8349,10 @@ namespace OrderingSystem.Infrastructure.Repositories
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\OrderRepository.cs
 ----------------------------------------
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
 
 namespace OrderingSystem.Infrastructure.Repositories
@@ -8197,7 +8388,9 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task DeleteOrderAsync(Order order)
         {
-            _context.Orders.Remove(order);
+            order.OrderStatus = enOrderStatus.Cancelled;
+
+            _context.Orders.Update(order);
             await _context.SaveChangesAsync();
         }
     }

@@ -3,6 +3,7 @@ using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
+using System.Security.Cryptography;
 
 namespace OrderingSystem.Application.Services
 {
@@ -36,7 +37,7 @@ namespace OrderingSystem.Application.Services
             }
 
             // Generate unique QR Code payload
-            string uniqueSegment = Guid.CreateVersion7().ToString()[..8];
+            string uniqueSegment = RandomNumberGenerator.GetHexString(4);
             string generatedQrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{uniqueSegment}".ToUpper();
 
             var newTable = new Table
@@ -99,13 +100,31 @@ namespace OrderingSystem.Application.Services
             return Result.Success();
         }
 
+        public async Task<Result<TableResponse>> RegenerateQrCode(int tableId)
+        {
+            var table = await _tableRepository.GetTableByIdAsync(tableId);
+            if (table == null)
+            {
+                return Result<TableResponse>.Failure("Table was not found.", enErrorType.NotFound);
+            }
+
+            // Regenerate the QR Code for security so old printed codes become invalid
+            string newUniqueSegment = RandomNumberGenerator.GetHexString(4);
+            table.QrCode = $"TBL-F{table.FloorNumber}-N{table.TableNumber}-{newUniqueSegment}".ToUpper();
+
+            await _tableRepository.UpdateTableAsync(table);
+
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status);
+            return Result<TableResponse>.Success(response);
+        }
+
         private async Task<TableResponse> RestoreTableAsync(Table existingTable, AddTableRequest request)
         {
             existingTable.IsDeleted = false;
             existingTable.Status = enTableStatus.Available;
 
             // Regenerate the QR Code for security so old printed codes become invalid
-            string newUniqueSegment = Guid.CreateVersion7().ToString()[..8];
+            string newUniqueSegment = RandomNumberGenerator.GetHexString(4);
             existingTable.QrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{newUniqueSegment}".ToUpper();
 
             await _tableRepository.UpdateTableAsync(existingTable);

@@ -1,6 +1,8 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
 
 namespace OrderingSystem.Infrastructure.Repositories
@@ -36,7 +38,9 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task DeleteOrderAsync(Order order)
         {
-            _context.Orders.Remove(order);
+            order.OrderStatus = enOrderStatus.Cancelled;
+
+            _context.Orders.Update(order);
             await _context.SaveChangesAsync();
         }
     }

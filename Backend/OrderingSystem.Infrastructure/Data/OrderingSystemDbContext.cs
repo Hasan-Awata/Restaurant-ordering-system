@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 
 namespace OrderingSystem.Infrastructure.Data
 {
@@ -134,6 +135,9 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(d => d.Orders)
                       .HasForeignKey(e => e.DeviceSessionId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasQueryFilter(e => e.OrderStatus != enOrderStatus.Cancelled);
+
             });
 
             // 8. OrderItems

@@ -39,8 +39,44 @@ namespace OrderingSystem.WebApi.Middleware
                 case DbUpdateException dbUpdateEx:
                     statusCode = StatusCodes.Status409Conflict;
                     title = "Database Constraint Violation";
-                    detail = dbUpdateEx.InnerException?.Message ?? dbUpdateEx.Message;
-                    _logger.LogWarning(dbUpdateEx, "Database constraint violation.");
+
+                    // 1. Check if the underlying database threw a Postgres-specific exception
+                    if (dbUpdateEx.InnerException is PostgresException pgEx)
+                    {
+                        // 2. Map the specific PostgreSQL state code to a safe, precise business message
+                        detail = pgEx.SqlState switch
+                        {
+                            // 23505: unique_violation
+                            PostgresErrorCodes.UniqueViolation => "A record with this information already exists.",
+
+                            // 23503: foreign_key_violation
+                            PostgresErrorCodes.ForeignKeyViolation => "This operation failed because the record is either currently in use or references missing data.",
+
+                            // 23514: check_violation
+                            PostgresErrorCodes.CheckViolation => "The provided data violates a business rule constraint.",
+
+                            // 23502: not_null_violation
+                            PostgresErrorCodes.NotNullViolation => "A required piece of information was missing.",
+
+                            _ => "A database constraint was violated."
+                        };
+
+                        // Optional: If you want absolute precision, you can safely map specific constraint names
+                        // without exposing them to the client.
+                        if (pgEx.ConstraintName == "IX_TableSessions_TableId")
+                        {
+                            detail = "This table already has an active session.";
+                        }
+
+                        // Log the actual sensitive data securely on the server
+                        _logger.LogWarning(dbUpdateEx, "Database constraint violation. SqlState: {SqlState}, Constraint: {ConstraintName}", pgEx.SqlState, pgEx.ConstraintName);
+                    }
+                    else
+                    {
+                        // Fallback for non-Postgres DbUpdateExceptions
+                        detail = "A data conflict occurred while processing your request.";
+                        _logger.LogWarning(dbUpdateEx, "Database constraint violation (Non-Postgres).");
+                    }
                     break;
 
                 // Caught THIRD: Client disconnected or request timed out
@@ -54,7 +90,6 @@ namespace OrderingSystem.WebApi.Middleware
                     break;
 
                 // Caught FOURTH: PostgreSQL server connectivity issues
-                case PostgresException pgEx:
                 case NpgsqlException npgsqlEx:
                     statusCode = StatusCodes.Status500InternalServerError;
                     title = "Database Connection Error";

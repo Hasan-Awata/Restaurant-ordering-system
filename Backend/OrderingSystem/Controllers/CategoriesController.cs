@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.Category;
@@ -22,6 +23,7 @@ namespace OrderingSystem.WebApi.Controllers
             _categoryQueryService = categoryQueryService;
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpPost]
         public async Task<IActionResult> AddCategory([FromBody] CategoriesRecords.AddCategoryRequest request)
         {
@@ -34,6 +36,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpPut]
         public async Task<IActionResult> UpdateCategory([FromBody] CategoriesRecords.UpdateCategoryRequest request)
         {
@@ -41,6 +44,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpDelete]
         public async Task<IActionResult> DeleteCategory([FromBody] CategoriesRecords.DeleteCategoryRequest request)
         {

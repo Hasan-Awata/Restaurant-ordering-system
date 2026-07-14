@@ -162,21 +162,28 @@ namespace OrderingSystem.Application.Services
             return Result<TableSessionResponse>.Success(session.ToResponse());
         }
 
-        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request)
+        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request, Guid hostDeviceSessionId)
         {
-            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.deviceSessionId);
-
-            if (deviceSession == null)
-            {
+            var guestDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.deviceSessionId);
+            if (guestDeviceSession == null)
                 return Result<SessionResponse>.Failure("Device session not found.", enErrorType.NotFound);
+
+            // Fetch the host's session to verify authority
+            var hostDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(hostDeviceSessionId);
+
+            // Validate role and table session match
+            if (hostDeviceSession == null ||
+                hostDeviceSession.Role != enDeviceRole.Host ||
+                hostDeviceSession.TableSessionId != guestDeviceSession.TableSessionId)
+            {
+                return Result<SessionResponse>.Failure("Unauthorized to approve guests for this table.", enErrorType.Unauthorized);
             }
 
-            deviceSession.IsApproved = true;
-            await _deviceSessionRepository.UpdateDeviceSessionAsync(deviceSession);
+            guestDeviceSession.IsApproved = true;
+            await _deviceSessionRepository.UpdateDeviceSessionAsync(guestDeviceSession);
+            await _notifier.NotifyGuestOfApprovalAsync(guestDeviceSession.DeviceSessionId);
 
-            await _notifier.NotifyGuestOfApprovalAsync(deviceSession.DeviceSessionId);
-
-            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));
+            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(guestDeviceSession.TableSession, guestDeviceSession));
         }
 
         public async Task<Result> DeactivateTableSessionAsync(Guid tableSessionId)

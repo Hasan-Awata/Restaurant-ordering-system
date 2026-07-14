@@ -14,12 +14,13 @@ namespace OrderingSystem.Application.DTOs
     public record DeactivateSessionByAdminRequest([Required] int TableId);
     public record RequestBillRequest([Required] Guid TableSessionId);
     public record ApproveBillRequest([Required] Guid TableSessionId);
-    public record BillItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice, decimal TotalPrice);
+
 
     // Query/Command Response Payloads
     public record DeviceSessionResponse(Guid DeviceSessionId, enDeviceRole DeviceRole, bool IsApproved);
     public record TableSessionResponse(Guid TableSessionId, int TableNumber, enSessionStatus Status, DateTime CreatedAt);
     public record SessionResponse(TableSessionResponse TableSession, DeviceSessionResponse? DeviceSession);
+    public record BillItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice, decimal TotalPrice);
     public record GuestBillResponse(Guid DeviceSessionId, enDeviceRole Role, List<BillItemResponse> Items, decimal SubTotal);
     public record BillSummaryResponse(
         Guid TableSessionId,

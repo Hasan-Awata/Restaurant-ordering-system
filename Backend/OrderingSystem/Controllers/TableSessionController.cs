@@ -67,7 +67,10 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost("approve")]
         public async Task<IActionResult> ApproveGuest([FromBody] ApproveJoiningSessionRequest request)
         {
-            var result = await _sessionCommandService.ApproveJoiningRequestAsync(request);
+            if (!CurrentDeviceSessionId.HasValue)
+                return Unauthorized(new { error = "Invalid or missing device session." });
+
+            var result = await _sessionCommandService.ApproveJoiningRequestAsync(request, CurrentDeviceSessionId.Value);
             return HandleResult(result);
         }
 
