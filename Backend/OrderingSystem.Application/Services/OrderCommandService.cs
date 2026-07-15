@@ -2,6 +2,7 @@
 using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
@@ -13,15 +14,18 @@ namespace OrderingSystem.Application.Services
         private readonly IOrderRepository _orderRepository;
         private readonly IMenueItemRepository _menuItemRepository;
         private readonly IRealTimeNotifier _notifier;
+        private readonly IDeviceSessionRepository _deviceSessionRepository;
 
         public OrderCommandService(
             IOrderRepository orderRepository,
             IMenueItemRepository menuItemRepository,
-            IRealTimeNotifier notifier)
+            IRealTimeNotifier notifier,
+            IDeviceSessionRepository deviceSessionRepository)
         {
             _orderRepository = orderRepository;
             _menuItemRepository = menuItemRepository;
             _notifier = notifier;
+            _deviceSessionRepository = deviceSessionRepository;
         }
 
         public async Task<Result<OrderRecords.OrderResponse>> AddOrderAsync(OrderRecords.CreateOrderRequest request)
@@ -39,6 +43,13 @@ namespace OrderingSystem.Application.Services
             if (!request.Items.Any())
             {
                 return Result<OrderRecords.OrderResponse>.Failure("Order must contain at least one item.", enErrorType.Validation);
+            }
+
+            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.DeviceSessionId);
+
+            if (deviceSession == null || !deviceSession.IsApproved)
+            {
+                return Result<OrderRecords.OrderResponse>.Failure("You must be approved by the table host before ordering.", enErrorType.Unauthorized);
             }
 
             decimal totalAmount = 0;
