@@ -190,18 +190,15 @@ builder.Services.AddCors(options =>
 
     // 2. Iron-clad policy for Production
     options.AddPolicy("ProductionPolicy", builder =>
-            builder.SetIsOriginAllowed(_ => true)
-               .AllowAnyMethod()
-               .AllowAnyHeader()
+         builder.WithOrigins(
+                "http://127.0.0.1:5500",
+                "http://localhost:3000",
+                "http://localhost:8080",
+                "https://courageous-pika-0f4f00.netlify.app"
+               )
+               .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
                .AllowCredentials());
-            //builder.WithOrigins(
-            //    "http://127.0.0.1:5500",
-            //    "http://localhost:3000",
-            //    "http://localhost:8080"
-            //   )
-            //   .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-            //   .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
-            //   .AllowCredentials());
 });
 
 // ─────────────────────────────────────────────────────────────────────────
