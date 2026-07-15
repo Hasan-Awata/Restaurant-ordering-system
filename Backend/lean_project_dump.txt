@@ -954,7 +954,7 @@ namespace OrderingSystem.WebApi.Controllers
                 {
                     HttpOnly = true,
                     Secure = true,
-                    SameSite = SameSiteMode.Lax,
+                    SameSite = SameSiteMode.None,
                     Expires = DateTime.UtcNow.AddHours(4)
                 };
 
@@ -2587,6 +2587,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
 using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
@@ -2598,15 +2599,18 @@ namespace OrderingSystem.Application.Services
         private readonly IOrderRepository _orderRepository;
         private readonly IMenueItemRepository _menuItemRepository;
         private readonly IRealTimeNotifier _notifier;
+        private readonly IDeviceSessionRepository _deviceSessionRepository;
 
         public OrderCommandService(
             IOrderRepository orderRepository,
             IMenueItemRepository menuItemRepository,
-            IRealTimeNotifier notifier)
+            IRealTimeNotifier notifier,
+            IDeviceSessionRepository deviceSessionRepository)
         {
             _orderRepository = orderRepository;
             _menuItemRepository = menuItemRepository;
             _notifier = notifier;
+            _deviceSessionRepository = deviceSessionRepository;
         }
 
         public async Task<Result<OrderRecords.OrderResponse>> AddOrderAsync(OrderRecords.CreateOrderRequest request)
@@ -2624,6 +2628,13 @@ namespace OrderingSystem.Application.Services
             if (!request.Items.Any())
             {
                 return Result<OrderRecords.OrderResponse>.Failure("Order must contain at least one item.", enErrorType.Validation);
+            }
+
+            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.DeviceSessionId);
+
+            if (deviceSession == null || !deviceSession.IsApproved)
+            {
+                return Result<OrderRecords.OrderResponse>.Failure("You must be approved by the table host before ordering.", enErrorType.Unauthorized);
             }
 
             decimal totalAmount = 0;
@@ -3862,34 +3873,44 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
                     await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Waiters);
             }
 
-            // 2. Check Cookie (Customer Authentication)
-            if (!isAuthenticated && httpContext != null &&
-                httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var deviceIdStr) &&
-                Guid.TryParse(deviceIdStr, out var deviceSessionId))
+            // 2. Check Query String OR Cookie (Customer Authentication)
+            if (!isAuthenticated && httpContext != null)
             {
-                // SECURE LOOKUP: Use the trusted cookie to find the table session in the DB
-                var dbContext = httpContext.RequestServices.GetRequiredService<OrderingSystemDbContext>();
+                // First try to grab the DeviceSessionId from the Query String 
+                string? deviceIdStr = httpContext.Request.Query["DeviceSessionId"];
 
-                var deviceRecord = await dbContext.SessionDevices
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(d => d.DeviceSessionId == deviceSessionId);
-
-                if (deviceRecord != null)
+                // Fallback to Cookie if it's missing from the Query String
+                if (string.IsNullOrEmpty(deviceIdStr))
                 {
-                    isAuthenticated = true;
+                    httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out deviceIdStr);
+                }
 
-                    // Add to private device group (for personal order updates)
-                    await Groups.AddToGroupAsync(Context.ConnectionId, deviceSessionId.ToString());
+                if (!string.IsNullOrEmpty(deviceIdStr) && Guid.TryParse(deviceIdStr, out var deviceSessionId))
+                {
+                    // SECURE LOOKUP: Use the token to find the table session in the DB
+                    var dbContext = httpContext.RequestServices.GetRequiredService<OrderingSystemDbContext>();
 
-                    // Add to table group (for table-wide events like bill approvals)
-                    await Groups.AddToGroupAsync(Context.ConnectionId, deviceRecord.TableSessionId.ToString());
+                    var deviceRecord = await dbContext.SessionDevices
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(d => d.DeviceSessionId == deviceSessionId);
+
+                    if (deviceRecord != null)
+                    {
+                        isAuthenticated = true;
+
+                        // Add to private device group (for personal order updates)
+                        await Groups.AddToGroupAsync(Context.ConnectionId, deviceSessionId.ToString());
+
+                        // Add to table group (for table-wide events like bill approvals)
+                        await Groups.AddToGroupAsync(Context.ConnectionId, deviceRecord.TableSessionId.ToString());
+                    }
                 }
             }
 
             // 3. Reject unauthenticated or invalid connections completely
             if (!isAuthenticated)
             {
-                Context.Abort();
+                Context.Abort(); // This is what triggers the {"type":7} message!
                 return;
             }
 
