@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpLogging;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
@@ -30,6 +31,17 @@ var builder = WebApplication.CreateBuilder(args);
 
 // ── Caching ──────────────────────────────────────────────────────────────
 builder.Services.AddMemoryCache();
+
+// ── HTTP Logging ─────────────────────────────────────────────────────────
+builder.Services.AddHttpLogging(logging =>
+{
+    logging.LoggingFields = HttpLoggingFields.All;
+    // Scrub the JWT token from the logs
+    logging.RequestHeaders.Add("Authorization");
+    logging.MediaTypeOptions.AddText("application/json");
+    // This is the critical line:
+    logging.CombineLogs = true;
+});
 
 // ── Controllers & JSON ───────────────────────────────────────────────────
 builder.Services.AddControllers()

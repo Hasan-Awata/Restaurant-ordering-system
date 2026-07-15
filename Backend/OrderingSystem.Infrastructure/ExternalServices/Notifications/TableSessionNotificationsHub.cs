@@ -36,14 +36,17 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
             // 2. Check Query String OR Cookie (Customer Authentication)
             if (!isAuthenticated && httpContext != null)
             {
-                // First try to grab the DeviceSessionId from the Query String 
-                string? deviceIdStr = httpContext.Request.Query["DeviceSessionId"];
 
-                // Fallback to Cookie if it's missing from the Query String
-                if (string.IsNullOrEmpty(deviceIdStr))
-                {
-                    httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out deviceIdStr);
-                }
+                httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out string? deviceIdStr);
+
+                //// First try to grab the DeviceSessionId from the Query String 
+                //string? deviceIdStr = httpContext.Request.Query["DeviceSessionId"];
+
+                //// Fallback to Cookie if it's missing from the Query String
+                //if (string.IsNullOrEmpty(deviceIdStr))
+                //{
+                //    httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out deviceIdStr);
+                //}
 
                 if (!string.IsNullOrEmpty(deviceIdStr) && Guid.TryParse(deviceIdStr, out var deviceSessionId))
                 {
