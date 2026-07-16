@@ -23,7 +23,8 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
             bool isAuthenticated = false;
 
             // 1. Check JWT (Staff Authentication)
-            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
+            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value ?? Context.User?.FindFirst("role")?.Value;
+            
             if (!string.IsNullOrEmpty(role))
             {
                 isAuthenticated = true;
