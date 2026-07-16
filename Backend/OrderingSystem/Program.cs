@@ -91,7 +91,19 @@ builder.Services.AddSwaggerGen(options =>
 // ── Database Context ──────────────────────────────────────────────────────
 builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
-        b => b.MigrationsAssembly(typeof(OrderingSystemDbContext).Assembly.FullName)));
+        b =>
+        {
+            b.MigrationsAssembly(typeof(OrderingSystemDbContext).Assembly.FullName);
+            b.EnableRetryOnFailure(
+                maxRetryCount: 3,
+                maxRetryDelay: TimeSpan.FromSeconds(2),
+                errorCodesToAdd: null
+            );
+        }));
+
+// ── Health Checks ──────────────────────────────────────────────────────────
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<OrderingSystemDbContext>();
 
 // ── Dependency Injections ──────────────────────────────────────────────────
 // Register the Global Exception Handler and standard Problem Details
@@ -227,6 +239,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers().RequireRateLimiting("Fixed");
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
+app.MapHealthChecks("/api/health");
 
 using (var scope = app.Services.CreateScope())
 {
