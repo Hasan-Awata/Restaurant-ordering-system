@@ -2,10 +2,7 @@
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.DTOs;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http;
 using OrderingSystem.WebApi.Controllers.Base;
-using System;
-using System.Threading.Tasks;
 
 namespace OrderingSystem.WebApi.Controllers
 {
