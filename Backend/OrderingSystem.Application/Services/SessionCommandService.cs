@@ -231,6 +231,9 @@ namespace OrderingSystem.Application.Services
             // Notify the cashiers
             await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
 
+            table.Status = enTableStatus.Billing;
+            await _tableRepository.UpdateTableAsync(table);
+
             return Result.Success();
         }
 
