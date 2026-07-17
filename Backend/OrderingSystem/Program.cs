@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpLogging;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
@@ -16,6 +15,7 @@ using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Services;
 using OrderingSystem.Infrastructure.Authentication;
+using OrderingSystem.Infrastructure.Caching;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Infrastructure.ExternalServices.Notifications;
 using OrderingSystem.Infrastructure.Notifications;
@@ -31,6 +31,22 @@ var builder = WebApplication.CreateBuilder(args);
 
 // ── Caching ──────────────────────────────────────────────────────────────
 builder.Services.AddMemoryCache();
+
+// Register the base query concrete class so it can be resolved by the decorator
+builder.Services.AddScoped<CategoryQuery>();
+
+// Register the decorator against the interface
+builder.Services.AddScoped<ICategoryQuery>(provider =>
+{
+    // Resolve the original database-hitting query class
+    var innerQuery = provider.GetRequiredService<CategoryQuery>();
+
+    // Resolve the memory cache (already registered at the top of Program.cs)
+    var cache = provider.GetRequiredService<IMemoryCache>();
+
+    // Return the cached version wrapping the original
+    return new CachedCategoryQuery(innerQuery, cache);
+});
 
 // ── HTTP Logging ─────────────────────────────────────────────────────────
 builder.Services.AddHttpLogging(logging =>

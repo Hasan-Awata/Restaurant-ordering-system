@@ -67,6 +67,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\OrderingS
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="10.0.9" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
 	<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
 	<PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.9" />
@@ -185,7 +186,19 @@ builder.Services.AddSwaggerGen(options =>
 // ── Database Context ──────────────────────────────────────────────────────
 builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
-        b => b.MigrationsAssembly(typeof(OrderingSystemDbContext).Assembly.FullName)));
+        b =>
+        {
+            b.MigrationsAssembly(typeof(OrderingSystemDbContext).Assembly.FullName);
+            b.EnableRetryOnFailure(
+                maxRetryCount: 3,
+                maxRetryDelay: TimeSpan.FromSeconds(2),
+                errorCodesToAdd: null
+            );
+        }));
+
+// ── Health Checks ──────────────────────────────────────────────────────────
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<OrderingSystemDbContext>();
 
 // ── Dependency Injections ──────────────────────────────────────────────────
 // Register the Global Exception Handler and standard Problem Details
@@ -321,6 +334,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers().RequireRateLimiting("Fixed");
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
+app.MapHealthChecks("/api/health");
 
 using (var scope = app.Services.CreateScope())
 {
@@ -3872,7 +3886,8 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
             bool isAuthenticated = false;
 
             // 1. Check JWT (Staff Authentication)
-            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value;
+            var role = Context.User?.FindFirst(ClaimTypes.Role)?.Value ?? Context.User?.FindFirst("role")?.Value;
+            
             if (!string.IsNullOrEmpty(role))
             {
                 isAuthenticated = true;
