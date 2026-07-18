@@ -80,7 +80,7 @@ namespace OrderingSystem.WebApi.Controllers
                 return Unauthorized(new { error = "Invalid or missing device session." });
             }
 
-            var result = await _sessionCommandService.RequestBillAsync(request.TableSessionId, CurrentDeviceSessionId.Value);
+            var result = await _sessionCommandService.RequestBillAsync(request.tableSessionId, CurrentDeviceSessionId.Value);
             return HandleResult(result);
         }
 
@@ -89,7 +89,7 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost("approve-bill")]
         public async Task<IActionResult> ApproveBill([FromBody] ApproveBillRequest request)
         {
-            var result = await _sessionCommandService.ApproveBillAsync(request.TableSessionId);
+            var result = await _sessionCommandService.ApproveBillAsync(request.tableSessionId);
             return HandleResult(result);
         }
 

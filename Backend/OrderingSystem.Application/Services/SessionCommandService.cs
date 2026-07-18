@@ -226,6 +226,9 @@ namespace OrderingSystem.Application.Services
             if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
                 return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
 
+            if(session.Orders.Count == 0)
+                return Result.Failure("No orders available for billing.", enErrorType.Validation);
+
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
 
             // Notify the cashiers

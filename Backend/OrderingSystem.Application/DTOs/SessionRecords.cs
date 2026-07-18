@@ -11,9 +11,9 @@ namespace OrderingSystem.Application.DTOs
     public record ProcessQrCodeRequest([Required] string qrCode);
     public record ApproveJoiningSessionRequest([Required] Guid deviceSessionId);
     public record ActivateTableSessionRequest([Required] Guid tableSessionId); 
-    public record DeactivateSessionByAdminRequest([Required] int TableId);
-    public record RequestBillRequest([Required] Guid TableSessionId);
-    public record ApproveBillRequest([Required] Guid TableSessionId);
+    public record DeactivateSessionByAdminRequest([Required] int tableId);
+    public record RequestBillRequest([Required] Guid tableSessionId);
+    public record ApproveBillRequest([Required] Guid tableSessionId);
 
 
     // Query/Command Response Payloads
