@@ -34,12 +34,26 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task<bool> DeleteCategoryAsync(Category category)
         {
-            if (category == null)
+            if (category == null) return false;
+
+            // 1. Soft delete the parent category
+            category.IsDeleted = true;
+            category.IsAvailable = false;
+
+            // 2. Cascade the soft delete to all associated menu items
+            var menuItems = await _dbContext.MenuItems
+                .Where(m => m.CategoryId == category.CategoryId)
+                .ToListAsync();
+
+            foreach (var item in menuItems)
             {
-                return false;
+                item.IsDeleted = true;
+                item.IsAvailable = false;
             }
 
-            _dbContext.Categories.Remove(category);
+            _dbContext.Categories.Update(category);
+            _dbContext.MenuItems.UpdateRange(menuItems);
+
             await _dbContext.SaveChangesAsync();
             return true;
         }
@@ -47,11 +61,11 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task<Category?> GetCategoryByIdAsync(int categoryId)
         {
             return await _dbContext.Categories.FirstOrDefaultAsync(c => c.CategoryId == categoryId);
+
         }
 
         public async Task<bool> GetCategoryExistsAsync(int categoryId)
         {
-            // استخدام AnyAsync أفضل للأداء من جلب الكائن كاملاً للتحقق من وجوده
             return await _dbContext.Categories.AnyAsync(c => c.CategoryId == categoryId);
         }
 

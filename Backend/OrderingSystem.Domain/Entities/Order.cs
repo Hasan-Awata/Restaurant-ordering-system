@@ -11,7 +11,7 @@ namespace OrderingSystem.Domain.Entities
         public Guid TableSessionId { get; set; }
         public Guid DeviceSessionId { get; set; }
         public decimal TotalAmount { get; set; }
-        public enOrderStatusType OrderStatus { get; set; }
+        public enOrderStatus OrderStatus { get; set; }
         public DateTime CreatedAt { get; set; }
 
         // Navigation

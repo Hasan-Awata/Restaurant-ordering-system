@@ -1,10 +1,4 @@
-﻿// File: OrderingSystem.Infrastructure/Services/TableSessionRepository.cs
-
-using System.Threading.Tasks;
-using Microsoft.EntityFrameworkCore;
-using OrderingSystem.Application.Interfaces;
-using OrderingSystem.Application.DTOs;
-using OrderingSystem.Application.Mappers;
+﻿using Microsoft.EntityFrameworkCore;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
@@ -31,6 +25,14 @@ namespace OrderingSystem.Infrastructure.Repositories
                     .FirstOrDefaultAsync(t => t.QrCode == qrCode);
         }
 
+        public async Task<TableSession?> GetActiveTableSessionWithOrdersAndDevicesAsync(Guid tableSessionId)
+        {
+            return await _context.TableSessions
+            .Include(s => s.Orders)
+            .Include(s => s.Devices)
+            .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId && s.ClosedAt == null);
+        }
+
         public async Task AddSessionAsync(TableSession session)
         {
             _context.TableSessions.Add(session);
@@ -47,6 +49,12 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task UpdateSessionAsync(TableSession session)
         {
             _context.TableSessions.Update(session);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task DeleteSessionAsync(TableSession session)
+        {
+            _context.TableSessions.Remove(session);
             await _context.SaveChangesAsync();
         }
     }

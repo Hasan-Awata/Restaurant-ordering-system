@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 
 namespace OrderingSystem.Infrastructure.Data
 {
@@ -47,17 +48,28 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.FloorNumber).IsRequired();
                 entity.Property(e => e.Status).IsRequired();
                 entity.Property(e => e.QrCode).IsRequired().HasMaxLength(255);
+                entity.Property(e => e.IsDeleted).IsRequired();
+
+                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
+                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
+                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
 
                 entity.HasMany(t => t.Sessions)
                       .WithOne(ts => ts.Table)
                       .HasForeignKey(ts => ts.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
 
             // 3. TableSessions
             modelBuilder.Entity<TableSession>(entity =>
             {
                 entity.HasKey(e => e.TableSessionId);
+
+                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
+                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
+                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
 
                 entity.HasOne(e => e.Table)
                       .WithMany(t => t.Sessions)
@@ -71,6 +83,9 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.HasKey(e => e.CategoryId);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
+                entity.Property(e => e.IsDeleted).IsRequired();
+
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
 
             // 5. MenuItems
@@ -80,11 +95,14 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.Price).HasPrecision(18, 2);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
+                entity.Property(e => e.IsDeleted).IsRequired();
              
                 entity.HasOne(e => e.Category)
                       .WithMany(c => c.MenuItems)
                       .HasForeignKey(e => e.CategoryId)
-                      .OnDelete(DeleteBehavior.Cascade);
+                      .OnDelete(DeleteBehavior.Restrict);
+                
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
 
             // 6. DeviceSession
@@ -104,6 +122,10 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.HasKey(e => e.OrderId);
                 entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
 
+                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
+                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
+                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
+
                 entity.HasOne(e => e.Session)
                       .WithMany(s => s.Orders)
                       .HasForeignKey(e => e.TableSessionId)
@@ -113,6 +135,9 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(d => d.Orders)
                       .HasForeignKey(e => e.DeviceSessionId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasQueryFilter(e => e.OrderStatus != enOrderStatus.Cancelled);
+
             });
 
             // 8. OrderItems
@@ -120,6 +145,7 @@ namespace OrderingSystem.Infrastructure.Data
             {
                 entity.HasKey(e => e.OrderItemId);
                 entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
+                entity.Property(e => e.Notes);
 
                 entity.HasOne(e => e.Order)
                       .WithMany(o => o.OrderItems)

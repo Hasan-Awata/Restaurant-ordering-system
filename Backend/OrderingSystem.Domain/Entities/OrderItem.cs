@@ -11,9 +11,10 @@ namespace OrderingSystem.Domain.Entities
         public int MenuItemId { get; set; }
         public int Quantity { get; set; }
         public decimal UnitPrice { get; set; }
+        public string Notes { get; set; } = "";
 
         // Navigation
-        public Order Order { get; set; } = new Order();
-        public MenuItem MenuItem { get; set; } = new MenuItem();
+        public Order Order { get; set; } = null!;
+        public MenuItem MenuItem { get; set; } = null!;
     }
 }

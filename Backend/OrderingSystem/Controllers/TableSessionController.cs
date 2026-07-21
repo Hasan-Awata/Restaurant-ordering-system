@@ -2,17 +2,17 @@
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.DTOs;
 using Microsoft.AspNetCore.Authorization;
+using OrderingSystem.WebApi.Controllers.Base;
 
 namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/tables/sessions")]
-    public class TableSessionsController : ControllerBase
+    public class TableSessionsController : BaseController
     {
         private readonly ISessionCommandService _sessionCommandService;
         private readonly ITableSessionQuery _sessionQueryService;
 
-        // Explicit dependency routing
         public TableSessionsController(
             ISessionCommandService sessionCommandService,
             ITableSessionQuery sessionQueryService)
@@ -22,22 +22,16 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // 1. WRITE ENDPOINT (Command Path)
+
+        // ── CUSTOMER PATH: Scan the QR code ─────────────────────────────────────
         [HttpPost("qr")]
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
-            // 1. Extract the secure cookie (if it exists)
-            Guid? secureDeviceId = null;
-            if (Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) &&
-                Guid.TryParse(cookieValue, out var parsedId))
-            {
-                secureDeviceId = parsedId;
-            }
+            // Use the secure cookie value extracted by the BaseController
+            var result = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, CurrentDeviceSessionId);
 
-            // 2. Pass the clean DTO and the secure cookie value as separate parameters
-            var response = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, secureDeviceId);
-
-            // 3. If successful, set/refresh the secure cookie
-            if (response.IsSuccess && response.Value?.DeviceSession != null)
+            // If successful, set/refresh the secure cookie
+            if (result.IsSuccess && result.Value?.DeviceSession != null)
             {
                 var cookieOptions = new CookieOptions
                 {
@@ -49,34 +43,75 @@ namespace OrderingSystem.WebApi.Controllers
 
                 Response.Cookies.Append(
                     "DeviceSessionId",
-                    response.Value.DeviceSession.DeviceSessionId.ToString(),
+                    result.Value.DeviceSession.DeviceSessionId.ToString(),
                     cookieOptions
                 );
             }
 
-            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
-            return Ok(response.Value);
+            return HandleResult(result);
         }
+
+        // ── CASHIER PATH: Approve the activation request ────────────────────────
         [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
         {
-            var response = await _sessionCommandService.ActivateTableSessionAsync(request);
-
-            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
-
-            return Ok(response.Value);
+            var result = await _sessionCommandService.ActivateTableSessionAsync(request);
+            return HandleResult(result);
         }
 
+        // ── CUSTOMER PATH: Approve the guests ───────────────────────────────────
         [HttpPost("approve")]
         public async Task<IActionResult> ApproveGuest([FromBody] ApproveJoiningSessionRequest request)
         {
-            // The service method for this was still intact in your dump
-            var response = await _sessionCommandService.ApproveJoiningRequestAsync(request);
+            if (!CurrentDeviceSessionId.HasValue)
+                return Unauthorized(new { error = "Invalid or missing device session." });
 
-            if (!response.IsSuccess) return BadRequest(response.ErrorMessage);
+            var result = await _sessionCommandService.ApproveJoiningRequestAsync(request, CurrentDeviceSessionId.Value);
+            return HandleResult(result);
+        }
 
-            return Ok(response.Value);
+        // ── CUSTOMER PATH: Request the bill ─────────────────────────────────────
+        [HttpPost("request-bill")]
+        public async Task<IActionResult> RequestBill([FromBody] RequestBillRequest request)
+        {
+            if (!CurrentDeviceSessionId.HasValue)
+            {
+                return Unauthorized(new { error = "Invalid or missing device session." });
+            }
+
+            var result = await _sessionCommandService.RequestBillAsync(request.tableSessionId, CurrentDeviceSessionId.Value);
+            return HandleResult(result);
+        }
+
+        // ── CASHIER PATH: Approve the bill ──────────────────────────────────────
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("approve-bill")]
+        public async Task<IActionResult> ApproveBill([FromBody] ApproveBillRequest request)
+        {
+            var result = await _sessionCommandService.ApproveBillAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
+        // ── CASHIER PATH: Close session after payment ───────────────────────────
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("end")]
+        public async Task<IActionResult> EndTableSession([FromBody] ActivateTableSessionRequest request)
+        {
+            // Reusing ActivateTableSessionRequest since it only contains the TableSessionId
+            var result = await _sessionCommandService.EndTableSessionAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
+        [HttpGet("{tableSessionId}/bill")]
+        public async Task<IActionResult> GetBillSummary(Guid tableSessionId)
+        {
+            var result = await _sessionQueryService.GetBillSummaryAsync(tableSessionId);
+
+            if (result == null)
+                return NotFound(new { error = $"No bill found for session ID {tableSessionId}." });
+
+            return Ok(result);
         }
 
         // 2. READ ENDPOINT (Query Path)
@@ -84,8 +119,9 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {
+            // Keeping standard Ok/NotFound since the Query returns a raw response, not Result<T>
             var response = await _sessionQueryService.GetActiveSessionByTableAsync(tableId);
-            if (response == null) return NotFound($"No active session found for table ID {tableId}.");
+            if (response == null) return NotFound(new { error = $"No active session found for table ID {tableId}." });
 
             return Ok(response);
         }

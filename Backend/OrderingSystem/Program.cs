@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpLogging;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OrderingSystem.Application.Interfaces.Auth;
@@ -8,6 +10,7 @@ using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem; 
 using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
@@ -19,6 +22,7 @@ using OrderingSystem.Infrastructure.Notifications;
 using OrderingSystem.Infrastructure.Queries;
 using OrderingSystem.Infrastructure.Repositories;
 using OrderingSystem.Infrastructure.Seeding;
+using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -28,6 +32,17 @@ var builder = WebApplication.CreateBuilder(args);
 // ── Caching ──────────────────────────────────────────────────────────────
 builder.Services.AddMemoryCache();
 
+// ── HTTP Logging ─────────────────────────────────────────────────────────
+builder.Services.AddHttpLogging(logging =>
+{
+    logging.LoggingFields = HttpLoggingFields.All;
+    // Scrub the JWT token from the logs
+    logging.RequestHeaders.Add("Authorization");
+    logging.MediaTypeOptions.AddText("application/json");
+    // This is the critical line:
+    logging.CombineLogs = true;
+});
+
 // ── Controllers & JSON ───────────────────────────────────────────────────
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
@@ -36,19 +51,21 @@ builder.Services.AddControllers()
 // ── Rate Limiting ────────────────────────────────────────────────────────
 builder.Services.AddRateLimiter(options =>
 {
-    options.AddFixedWindowLimiter("Fixed", limiterOptions =>
+    options.AddPolicy("Fixed", httpContext =>
     {
-        limiterOptions.PermitLimit = 100;
-        limiterOptions.Window = TimeSpan.FromMinutes(1);
-        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        limiterOptions.QueueLimit = 2;
-    });
+        var partitionKey = httpContext.Request.Cookies["DeviceSessionId"] ??
+                           httpContext.Connection.RemoteIpAddress?.ToString() ??
+                           "unknown";
 
-    options.OnRejected = async (context, token) =>
-    {
-        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-        await context.HttpContext.Response.WriteAsync("Too many requests. Please try again later.", cancellationToken: token);
-    };
+        return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ =>
+            new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 2
+            });
+    });
 });
 
 // ── Swagger with JWT Bearer ───────────────────────────────────────────────
@@ -74,11 +91,28 @@ builder.Services.AddSwaggerGen(options =>
 // ── Database Context ──────────────────────────────────────────────────────
 builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
-        b => b.MigrationsAssembly(typeof(OrderingSystemDbContext).Assembly.FullName)));
+        b =>
+        {
+            b.MigrationsAssembly(typeof(OrderingSystemDbContext).Assembly.FullName);
+            b.EnableRetryOnFailure(
+                maxRetryCount: 3,
+                maxRetryDelay: TimeSpan.FromSeconds(2),
+                errorCodesToAdd: null
+            );
+        }));
+
+// ── Health Checks ──────────────────────────────────────────────────────────
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<OrderingSystemDbContext>();
 
 // ── Dependency Injections ──────────────────────────────────────────────────
+// Register the Global Exception Handler and standard Problem Details
+builder.Services.AddExceptionHandler<OrderingSystem.WebApi.Middleware.GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
 builder.Services.AddSignalR();
 builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
+
 builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
 builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
 builder.Services.AddScoped<ITableSessionQuery, TableSessionQuery>();
@@ -96,6 +130,9 @@ builder.Services.AddScoped<ICategoryQuery, CategoryQuery>();
 builder.Services.AddScoped<IAuthCommandService, AuthCommandService>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IJwtProvider, JwtProvider>();
+builder.Services.AddScoped<IOrderRepository, OrderRepository>();
+builder.Services.AddScoped<IOrderCommandService, OrderCommandService>();
+builder.Services.AddScoped<IOrderQuery, OrderQuery>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -134,6 +171,20 @@ builder.Services.AddAuthentication(options =>
             }
 
             return Task.CompletedTask;
+        },
+
+        OnTokenValidated = context =>
+        {
+            var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
+            var tokenString = context.SecurityToken is JwtSecurityToken jwt ? jwt.RawData : string.Empty;
+
+            // If the token is found in the cache, it's revoked. Reject the request.
+            if (!string.IsNullOrEmpty(tokenString) && cache.TryGetValue($"blacklist_{tokenString}", out _))
+            {
+                context.Fail("This token has been revoked.");
+            }
+
+            return Task.CompletedTask;
         }
     };
 });
@@ -151,10 +202,11 @@ builder.Services.AddCors(options =>
 
     // 2. Iron-clad policy for Production
     options.AddPolicy("ProductionPolicy", builder =>
-        builder.WithOrigins(
+         builder.WithOrigins(
                 "http://127.0.0.1:5500",
                 "http://localhost:3000",
-                "http://localhost:8080"
+                "http://localhost:8080",
+                "https://courageous-pika-0f4f00.netlify.app"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
@@ -163,6 +215,10 @@ builder.Services.AddCors(options =>
 
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
+
+app.UseHttpLogging(); 
+app.UseExceptionHandler();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -184,6 +240,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers().RequireRateLimiting("Fixed");
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
+app.MapHealthChecks("/api/health");
 
 using (var scope = app.Services.CreateScope())
 {
@@ -202,6 +259,7 @@ using (var scope = app.Services.CreateScope())
     {
         var logger = services.GetRequiredService<ILogger<Program>>();
         logger.LogError(ex, "An error occurred while migrating the database.");
+        throw;
     }
 }
 app.Run();

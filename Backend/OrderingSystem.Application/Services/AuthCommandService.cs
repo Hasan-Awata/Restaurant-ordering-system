@@ -6,18 +6,21 @@ using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.IdentityModel.Tokens;
 namespace OrderingSystem.Application.Services
 {
     public class AuthCommandService : IAuthCommandService
     {
         private readonly IUserRepository _userRepository;
         private readonly IJwtProvider _jwtProvider;
+        private readonly IMemoryCache _cache;
 
-        public AuthCommandService(IUserRepository userRepository, IJwtProvider jwtProvider)
+        public AuthCommandService(IUserRepository userRepository, IJwtProvider jwtProvider, IMemoryCache cache)
         {
             _userRepository = userRepository;
             _jwtProvider = jwtProvider;
+            _cache = cache;
         }
 
         public async Task<Result<LoginResponse>> LoginAsync(LoginRequest request)
@@ -101,21 +104,18 @@ namespace OrderingSystem.Application.Services
             return Result<UserResponse>.Success(response);
         }
 
-        public async Task<Result> LogoutAsync(int userId)
+        public async Task<Result> LogoutAsync(int userId, string token)
         {
             var user = await _userRepository.GetUserByIdAsync(userId);
+            if (user == null) return Result.Failure("User not found.", enErrorType.NotFound);
 
-            if (user == null)
-            {
-                return Result.Failure("User not found.", enErrorType.NotFound);
-            }
-
-            // Revoke the tokens
             user.RefreshToken = null;
             user.RefreshTokenExpiryTime = null;
             user.AbsoluteRefreshTokenExpiryTime = null;
-
             await _userRepository.UpdateUserAsync(user);
+
+            // Add the token to the blacklist cache for 15 minutes (matching token lifespan)
+            _cache.Set($"blacklist_{token}", true, TimeSpan.FromMinutes(15));
 
             return Result.Success();
         }

@@ -1,12 +1,13 @@
 ﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Notifications;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Mappers;
-using OrderingSystem.Domain.Enums;
 using OrderingSystem.Domain.Common;
-using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Entities;
-using OrderingSystem.Application.Interfaces.Notifications;
-using OrderingSystem.Application.Interfaces.SessionsInterfaces;
+using OrderingSystem.Domain.Enums;
 
 namespace OrderingSystem.Application.Services
 {
@@ -14,17 +15,21 @@ namespace OrderingSystem.Application.Services
     {
         private readonly ITableSessionRepository _tableSessionRepository;
         private readonly IDeviceSessionRepository _deviceSessionRepository;
+        private readonly ITableRepository _tableRepository;
+        private readonly IOrderRepository _orderRepository;
         private readonly IRealTimeNotifier _notifier;
 
         public SessionCommandService(
             ITableSessionRepository tableSessionRepository,
             IDeviceSessionRepository deviceSessionRepository,
-            IDeviceSessionQuery deviceSessionQuery,
-            ITableSessionQuery tableSessionQuery,
+            ITableRepository tableRepository,
+            IOrderRepository orderRepository,
             IRealTimeNotifier notifier)
         {
             _tableSessionRepository = tableSessionRepository;
             _deviceSessionRepository = deviceSessionRepository;
+            _tableRepository = tableRepository;
+            _orderRepository = orderRepository;
             _notifier = notifier;
         }
 
@@ -65,6 +70,7 @@ namespace OrderingSystem.Application.Services
             }
 
             Guid newHostDeviceId = Guid.CreateVersion7();
+            table.Status = enTableStatus.Occupied;
             return await ActivateTableSessionAsync(table.TableId, newHostDeviceId);
         }
 
@@ -150,32 +156,144 @@ namespace OrderingSystem.Application.Services
             var hostDevice = session.Devices.FirstOrDefault(d => d.Role == enDeviceRole.Host);
             if (hostDevice != null)
             {
-                await _notifier.NotifyHostOfTableActivationAsync(hostDevice.DeviceSessionId);
+                await _notifier.NotifyHostOfTableActivationAsync(session.TableSessionId);
             }
 
             return Result<TableSessionResponse>.Success(session.ToResponse());
         }
 
-        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request)
+        public async Task<Result<SessionResponse>> ApproveJoiningRequestAsync(ApproveJoiningSessionRequest request, Guid hostDeviceSessionId)
         {
-            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.deviceSessionId);
-
-            if (deviceSession == null)
-            {
+            var guestDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.deviceSessionId);
+            if (guestDeviceSession == null)
                 return Result<SessionResponse>.Failure("Device session not found.", enErrorType.NotFound);
+
+            // Fetch the host's session to verify authority
+            var hostDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(hostDeviceSessionId);
+
+            // Validate role and table session match
+            if (hostDeviceSession == null ||
+                hostDeviceSession.Role != enDeviceRole.Host ||
+                hostDeviceSession.TableSessionId != guestDeviceSession.TableSessionId)
+            {
+                return Result<SessionResponse>.Failure("Unauthorized to approve guests for this table.", enErrorType.Unauthorized);
             }
 
-            deviceSession.IsApproved = true;
-            await _deviceSessionRepository.UpdateDeviceSessionAsync(deviceSession);
+            guestDeviceSession.IsApproved = true;
+            await _deviceSessionRepository.UpdateDeviceSessionAsync(guestDeviceSession);
+            await _notifier.NotifyGuestOfApprovalAsync(guestDeviceSession.DeviceSessionId);
 
-            await _notifier.NotifyGuestOfApprovalAsync(deviceSession.DeviceSessionId);
-
-            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(deviceSession.TableSession, deviceSession));
+            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(guestDeviceSession.TableSession, guestDeviceSession));
         }
 
-        public async Task<Result<SessionResponse>> DeactivateAsync(DeactivateSessionByAdminRequest request)
+        public async Task<Result> DeactivateTableSessionAsync(Guid tableSessionId)
         {
-            return Result<SessionResponse>.Failure("Not Implemented", enErrorType.Failure);
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            // 1. Explicitly delete orders to safely bypass the ON DELETE RESTRICT database constraint
+            if (session.Orders != null && session.Orders.Any())
+            {
+                foreach (var order in session.Orders.ToList())
+                {
+                    await _orderRepository.DeleteOrderAsync(order);
+                }
+            }
+
+            // 2. Hard delete the session (DeviceSessions will cascade automatically!)
+            await _tableSessionRepository.DeleteSessionAsync(session);
+
+            // 3. Reset the Table Status back to Available
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table != null)
+            {
+                table.Status = enTableStatus.Available;
+                await _tableRepository.UpdateTableAsync(table);
+            }
+
+            // Optional: Notify via SignalR that session is dropped
+            return Result.Success();
+        }
+
+        public async Task<Result> RequestBillAsync(Guid tableSessionId, Guid deviceSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            // Security check: Verify the device belongs to this table session
+            if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
+                return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
+
+            if(session.Orders.Count == 0)
+                return Result.Failure("No orders available for billing.", enErrorType.Validation);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+
+            // Notify the cashiers
+            await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
+
+            table.Status = enTableStatus.Billing;
+            await _tableRepository.UpdateTableAsync(table);
+
+            return Result.Success();
+        }
+
+        public async Task<Result> ApproveBillAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table == null)
+                return Result.Failure("Table not found.", enErrorType.NotFound);
+
+            // Change table status to Billing
+            table.Status = enTableStatus.Billing;
+            await _tableRepository.UpdateTableAsync(table);
+
+            // Notify the customer
+            await _notifier.NotifyCustomerOfBillApprovalAsync(tableSessionId);
+
+            return Result.Success();
+        }
+
+        public async Task<Result<SessionResponse>> EndTableSessionAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result<SessionResponse>.Failure("No active table session was found.", enErrorType.NotFound);
+
+            // 1. Soft close the session
+            session.Status = enSessionStatus.Closed;
+            session.ClosedAt = DateTime.UtcNow;
+
+            // 2. Flag all active orders as Served (excluding already cancelled ones)
+            if (session.Orders != null && session.Orders.Any())
+            {
+                foreach (var order in session.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled))
+                {
+                    order.OrderStatus = enOrderStatus.Served;
+                    await _orderRepository.UpdateOrderAsync(order);
+                }
+            }
+
+            // 3. Save the session status
+            await _tableSessionRepository.UpdateSessionAsync(session);
+
+            // 4. Reset the Table Status back to Available for the next customer
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table != null)
+            {
+                table.Status = enTableStatus.Available;
+                await _tableRepository.UpdateTableAsync(table);
+            }
+
+            // Optional: Notify clients via SignalR to show the "Thank You" or "Receipt" screen
+
+            return Result<SessionResponse>.Success(session.ToResponse(null));
         }
     }
 }

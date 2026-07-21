@@ -4,7 +4,7 @@ using System.Text;
 
 namespace OrderingSystem.Domain.Enums
 {
-    public enum enOrderStatusType
+    public enum enOrderStatus
     {
         Pending = 1,
         Preparing = 2,

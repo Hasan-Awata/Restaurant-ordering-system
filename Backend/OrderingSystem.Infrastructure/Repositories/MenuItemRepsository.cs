@@ -31,12 +31,13 @@ namespace OrderingSystem.Infrastructure.Repositories
         }
         public async Task<bool> DeleteMenuItemAsync(MenuItem menuItem)
         {
-            _dbContext.MenuItems.Remove(menuItem);
+            if (menuItem == null) return false;
+
+            menuItem.IsDeleted = true;
+            menuItem.IsAvailable = false;
+
+            _dbContext.MenuItems.Update(menuItem);
             await _dbContext.SaveChangesAsync();
-           if(menuItem == null)
-            {
-                return false;
-            }
             return true;
         }
 
