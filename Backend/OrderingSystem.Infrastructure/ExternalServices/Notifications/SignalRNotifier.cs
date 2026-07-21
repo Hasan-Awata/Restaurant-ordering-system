@@ -72,7 +72,7 @@ namespace OrderingSystem.Infrastructure.Notifications
         {
             // Broadcast to the entire table session group so all devices at the table know the bill is ready
             await _hubContext.Clients.Group(tableSessionId.ToString())
-                .ReceiveBillApprovalNotification("Your bill has been prepared and approved by the cashier.");
+                .ReceiveBillApprovalNotification(tableSessionId, "Your bill has been prepared and approved by the cashier.");
         }
     }
 }

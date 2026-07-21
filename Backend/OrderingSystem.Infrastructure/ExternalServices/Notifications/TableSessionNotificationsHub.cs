@@ -74,7 +74,7 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
             // 3. Reject unauthenticated or invalid connections completely
             if (!isAuthenticated)
             {
-                Context.Abort(); // This is what triggers the {"type":7} message!
+                Context.Abort();
                 return;
             }
 

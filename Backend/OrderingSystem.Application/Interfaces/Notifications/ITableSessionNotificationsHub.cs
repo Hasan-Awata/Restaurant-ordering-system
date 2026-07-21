@@ -14,6 +14,6 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveNewOrderNotification(int orderId, Guid tableSessionId, string message);
         public Task ReceiveOrderStatusUpdate(int orderId, enOrderStatus status, string message);
         public Task ReceiveBillRequestNotification(Guid tableSessionId, int tableNumber, string message);
-        public Task ReceiveBillApprovalNotification(string message);
+        public Task ReceiveBillApprovalNotification(Guid tableSessionId, string message);
     }
 }
