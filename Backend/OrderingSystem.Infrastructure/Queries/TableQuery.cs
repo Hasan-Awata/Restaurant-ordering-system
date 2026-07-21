@@ -137,5 +137,32 @@ namespace OrderingSystem.Infrastructure.Queries
 
             return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
+
+        public async Task<PagedResponse<PendingTableResponse>> GetAllBillingTablesAsync(PageDTO page)
+        {
+            var query = _context.Tables
+                .AsNoTracking()
+                .Where(t => t.Status == enTableStatus.Billing && t.Sessions.Any(s => s.ClosedAt == null));
+
+            var totalRecords = await query.CountAsync();
+
+            var tables = await query
+                    .Skip((page.PageNumber - 1) * page.PageSize)
+                    .Take(page.PageSize)
+                    .Select(t => new PendingTableResponse(
+                        t.TableId,
+                        t.TableNumber,
+                        t.FloorNumber,
+                        t.QrCode,
+                        t.Status,
+                        t.Sessions
+                            .Where(s => s.ClosedAt == null)
+                            .Select(s => s.TableSessionId)
+                            .FirstOrDefault()
+                    ))
+                    .ToListAsync();
+
+            return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
+        }
     }
 }

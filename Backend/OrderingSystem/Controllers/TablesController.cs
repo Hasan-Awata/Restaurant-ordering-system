@@ -118,5 +118,12 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _tableQueryService.GetAllPendingActivationTablesAsync(page);
             return Ok(result);
         }
+
+        [HttpGet("billing")]
+        public async Task<IActionResult> GetAllBillingTables([FromQuery] PageDTO page)
+        {
+            var result = await _tableQueryService.GetAllBillingTablesAsync(page);
+            return Ok(result);
+        }
     }
 }
