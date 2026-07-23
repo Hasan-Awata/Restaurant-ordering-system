@@ -930,6 +930,13 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _tableQueryService.GetAllPendingActivationTablesAsync(page);
             return Ok(result);
         }
+
+        [HttpGet("billing")]
+        public async Task<IActionResult> GetAllBillingTables([FromQuery] PageDTO page)
+        {
+            var result = await _tableQueryService.GetAllBillingTablesAsync(page);
+            return Ok(result);
+        }
     }
 }
 
@@ -1018,7 +1025,7 @@ namespace OrderingSystem.WebApi.Controllers
                 return Unauthorized(new { error = "Invalid or missing device session." });
             }
 
-            var result = await _sessionCommandService.RequestBillAsync(request.TableSessionId, CurrentDeviceSessionId.Value);
+            var result = await _sessionCommandService.RequestBillAsync(request.tableSessionId, CurrentDeviceSessionId.Value);
             return HandleResult(result);
         }
 
@@ -1027,7 +1034,7 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost("approve-bill")]
         public async Task<IActionResult> ApproveBill([FromBody] ApproveBillRequest request)
         {
-            var result = await _sessionCommandService.ApproveBillAsync(request.TableSessionId);
+            var result = await _sessionCommandService.ApproveBillAsync(request.tableSessionId);
             return HandleResult(result);
         }
 
@@ -1406,9 +1413,9 @@ namespace OrderingSystem.Application.DTOs
     public record ProcessQrCodeRequest([Required] string qrCode);
     public record ApproveJoiningSessionRequest([Required] Guid deviceSessionId);
     public record ActivateTableSessionRequest([Required] Guid tableSessionId); 
-    public record DeactivateSessionByAdminRequest([Required] int TableId);
-    public record RequestBillRequest([Required] Guid TableSessionId);
-    public record ApproveBillRequest([Required] Guid TableSessionId);
+    public record DeactivateSessionByAdminRequest([Required] int tableId);
+    public record RequestBillRequest([Required] Guid tableSessionId);
+    public record ApproveBillRequest([Required] Guid tableSessionId);
 
 
     // Query/Command Response Payloads
@@ -1750,7 +1757,7 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveNewOrderNotification(int orderId, Guid tableSessionId, string message);
         public Task ReceiveOrderStatusUpdate(int orderId, enOrderStatus status, string message);
         public Task ReceiveBillRequestNotification(Guid tableSessionId, int tableNumber, string message);
-        public Task ReceiveBillApprovalNotification(string message);
+        public Task ReceiveBillApprovalNotification(Guid tableSessionId, string message);
     }
 }
 
@@ -1967,6 +1974,7 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
         public Task<PagedResponse<TableResponse>> GetAllTablesAsync(PageDTO page);
         public Task<PagedResponse<TableResponse>> GetAllTablesByStatusAsync(PageDTO page, enTableStatus tableStatus);
         public Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page);
+        public Task<PagedResponse<PendingTableResponse>> GetAllBillingTablesAsync(PageDTO page);
     }
 }
 
@@ -3857,7 +3865,7 @@ namespace OrderingSystem.Infrastructure.Notifications
         {
             // Broadcast to the entire table session group so all devices at the table know the bill is ready
             await _hubContext.Clients.Group(tableSessionId.ToString())
-                .ReceiveBillApprovalNotification("Your bill has been prepared and approved by the cashier.");
+                .ReceiveBillApprovalNotification(tableSessionId, "Your bill has been prepared and approved by the cashier.");
         }
     }
 }
@@ -3941,7 +3949,7 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
             // 3. Reject unauthenticated or invalid connections completely
             if (!isAuthenticated)
             {
-                Context.Abort(); // This is what triggers the {"type":7} message!
+                Context.Abort();
                 return;
             }
 
@@ -8095,6 +8103,33 @@ namespace OrderingSystem.Infrastructure.Queries
                         t.Status,
                         t.Sessions
                             .Where(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null)
+                            .Select(s => s.TableSessionId)
+                            .FirstOrDefault()
+                    ))
+                    .ToListAsync();
+
+            return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
+        }
+
+        public async Task<PagedResponse<PendingTableResponse>> GetAllBillingTablesAsync(PageDTO page)
+        {
+            var query = _context.Tables
+                .AsNoTracking()
+                .Where(t => t.Status == enTableStatus.Billing && t.Sessions.Any(s => s.ClosedAt == null));
+
+            var totalRecords = await query.CountAsync();
+
+            var tables = await query
+                    .Skip((page.PageNumber - 1) * page.PageSize)
+                    .Take(page.PageSize)
+                    .Select(t => new PendingTableResponse(
+                        t.TableId,
+                        t.TableNumber,
+                        t.FloorNumber,
+                        t.QrCode,
+                        t.Status,
+                        t.Sessions
+                            .Where(s => s.ClosedAt == null)
                             .Select(s => s.TableSessionId)
                             .FirstOrDefault()
                     ))

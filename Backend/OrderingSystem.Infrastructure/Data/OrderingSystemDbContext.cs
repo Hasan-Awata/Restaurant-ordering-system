@@ -75,6 +75,9 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(t => t.Sessions)
                       .HasForeignKey(e => e.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasIndex(s => new { s.TableId, s.ClosedAt })
+                      .HasFilter(@"""ClosedAt"" IS NULL"); 
             });
 
             // 4. Categories
@@ -103,6 +106,8 @@ namespace OrderingSystem.Infrastructure.Data
                       .OnDelete(DeleteBehavior.Restrict);
                 
                 entity.HasQueryFilter(e => !e.IsDeleted);
+
+                entity.HasIndex(m => new { m.CategoryId, m.IsAvailable, m.IsDeleted });
             });
 
             // 6. DeviceSession
@@ -137,6 +142,8 @@ namespace OrderingSystem.Infrastructure.Data
                       .OnDelete(DeleteBehavior.Restrict);
 
                 entity.HasQueryFilter(e => e.OrderStatus != enOrderStatus.Cancelled);
+
+                entity.HasIndex(o => new { o.OrderStatus, o.CreatedAt });
 
             });
 

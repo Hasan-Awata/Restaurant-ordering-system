@@ -114,7 +114,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("MenuItemId");
 
-                    b.HasIndex("CategoryId");
+                    b.HasIndex("CategoryId", "IsAvailable", "IsDeleted");
 
                     b.ToTable("MenuItems");
                 });
@@ -154,6 +154,8 @@ namespace OrderingSystem.Infrastructure.Migrations
                     b.HasIndex("DeviceSessionId");
 
                     b.HasIndex("TableSessionId");
+
+                    b.HasIndex("OrderStatus", "CreatedAt");
 
                     b.ToTable("Orders");
                 });
@@ -254,7 +256,8 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TableSessionId");
 
-                    b.HasIndex("TableId");
+                    b.HasIndex("TableId", "ClosedAt")
+                        .HasFilter("\"ClosedAt\" IS NULL");
 
                     b.ToTable("TableSessions");
                 });
