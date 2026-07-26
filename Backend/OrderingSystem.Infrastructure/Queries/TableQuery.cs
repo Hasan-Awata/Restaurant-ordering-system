@@ -2,6 +2,7 @@
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
 using System.Linq;
@@ -164,5 +165,22 @@ namespace OrderingSystem.Infrastructure.Queries
 
             return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
+        public async Task<Result<int>> GetCountOfOccupiedTables()
+        {
+            try
+            {
+
+                var count = await _context.Tables
+                    .Where(t => t.Status == enTableStatus.Occupied)
+                    .CountAsync();
+
+                return Result<int>.Success(count);
+            }
+            catch (Exception ex)
+            {
+                return Result<int>.Failure($"Error when fetching count of occupied tables: {ex.Message}");
+            }
+        }
+
     }
 }

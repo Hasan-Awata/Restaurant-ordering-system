@@ -53,5 +53,74 @@ namespace OrderingSystem.Infrastructure.Queries
             var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
             return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
         }
+        public async Task<Result<List<OrderRecords.OrderItemResponse>>> GetTopThreeItemsTodayAsync()
+        {
+            var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
+
+            var rawItems = await _context.OrderItems
+                .AsNoTracking()
+                .Where(oi => oi.Order.CreatedAt.Date == today && oi.Order.OrderStatus != enOrderStatus.Cancelled)
+                .Where(oi => !oi.MenuItem.IsDeleted)
+                .GroupBy(oi => new
+                {
+                    oi.MenuItemId,
+                    oi.MenuItem.NameEn,
+                    oi.MenuItem.NameAr
+                })
+                .Select(g => new
+                {
+                    g.Key.MenuItemId,
+                    g.Key.NameEn,
+                    g.Key.NameAr,
+                    TotalQuantity = g.Sum(oi => oi.Quantity)
+                })
+                .OrderByDescending(r => r.TotalQuantity)
+                .Take(3)
+                .ToListAsync();
+
+            var itemsList = rawItems
+                .Select(x => new OrderRecords.OrderItemResponse(
+                    x.MenuItemId,
+                    x.NameEn,
+                    x.NameAr,
+                    x.TotalQuantity,
+                    0m,
+                    string.Empty
+                ))
+                .ToList();
+
+            return Result<List<OrderRecords.OrderItemResponse>>.Success(itemsList);
+        }
+        public async Task<Result<int>> GetCountOfPendingOrder()
+        {
+            try
+            {
+                var count = await _context.Orders
+                    .Where(o => o.OrderStatus == enOrderStatus.Pending)
+                    .CountAsync();
+
+                return Result<int>.Success(count);
+            }
+            catch (Exception ex)
+            {
+
+                return Result<int>.Failure($"Error when fetching pending order count: {ex.Message}");
+            }
+        }
+        public async Task<Result<int>> GetCountOfOrders()
+        {
+            try
+            {
+
+                var count = await _context.Orders.CountAsync();
+
+                return Result<int>.Success(count);
+            }
+            catch (Exception ex)
+            {
+                return Result<int>.Failure($"Error when fetching total order count: {ex.Message}");
+            }
+        }
+
     }
 }

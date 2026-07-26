@@ -9,6 +9,11 @@ namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
 {
     public interface IOrderQuery
     {
+        public Task<Result<List<OrderRecords.OrderItemResponse>>> GetTopThreeItemsTodayAsync();
+     
+        public Task<Result<int>> GetCountOfOrders();
+        public Task<Result<int>> GetCountOfPendingOrder();
+
         Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page);
     }
 }
