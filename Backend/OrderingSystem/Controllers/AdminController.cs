@@ -22,14 +22,14 @@ namespace OrderingSystem.Controllers
             _tableQuery = tableQuery;
         }
 
-         //[Authorize(Roles = "Admin,Cashier")]
+         [Authorize(Roles = "Admin,Cashier")]
           [HttpGet("top-three-today")]
         public async Task<IActionResult> GetTopThreeItemsToday()
         {
             var result = await _orderQuery.GetTopThreeItemsTodayAsync();
             return HandleResult(result);
         }
-        //[Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("pending-count-orders")]
         public async Task<IActionResult> GetCountOfPendingOrders()
         {
@@ -37,14 +37,14 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-       //[Authorize(Roles = "Admin,Cashier")]
+       [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-orders")]
         public async Task<IActionResult> GetCountOfOrders()
         {
             var result = await _orderQuery.GetCountOfOrders();
             return HandleResult(result);
         }
-      //  [Authorize(Roles = "Admin,Cashier")]
+        //  [Authorize(Roles = "Admin,Cashier")]
         //[HttpGet("total-count-table")]
         //public async Task<IActionResult> GetCountOfOccupiedTables()
         //{
@@ -52,7 +52,7 @@ namespace OrderingSystem.Controllers
         //    return HandleResult(result);
         //}
 
-
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-table")]
         public async Task<IActionResult> GetCountOfTaple()
         {
