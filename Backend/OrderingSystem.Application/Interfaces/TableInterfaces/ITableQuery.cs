@@ -19,5 +19,7 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
         public Task<PagedResponse<TableResponse>> GetAllTablesByStatusAsync(PageDTO page, enTableStatus tableStatus);
         public Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page);
         public Task<PagedResponse<PendingTableResponse>> GetAllBillingTablesAsync(PageDTO page);
+        public Task  <Result<int>> GetCountTable();
+
     }
 }

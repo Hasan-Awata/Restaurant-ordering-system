@@ -182,5 +182,22 @@ namespace OrderingSystem.Infrastructure.Queries
             }
         }
 
+
+        public async Task<Result<int>> GetCountTable()
+        {
+            try
+            {
+                var count = await _context.Tables
+                    .AsNoTracking()
+                    .Where(t => !t.IsDeleted) // في حال أردت استثناء الطاولات المحذوفة
+                    .CountAsync();
+
+                return Result<int>.Success(count);
+            }
+            catch (Exception ex)
+            {
+                return Result<int>.Failure($"Error when fetching count of tables: {ex.Message}");
+            }
+        }
     }
 }

@@ -45,10 +45,18 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
       //  [Authorize(Roles = "Admin,Cashier")]
+        //[HttpGet("total-count-table")]
+        //public async Task<IActionResult> GetCountOfOccupiedTables()
+        //{
+        //    var result = await _tableQuery.GetCountOfOccupiedTables();
+        //    return HandleResult(result);
+        //}
+
+
         [HttpGet("total-count-table")]
-        public async Task<IActionResult> GetCountOfOccupiedTables()
+        public async Task<IActionResult> GetCountOfTaple()
         {
-            var result = await _tableQuery.GetCountOfOccupiedTables();
+            var result = await _tableQuery.GetCountTable();
             return HandleResult(result);
         }
 
