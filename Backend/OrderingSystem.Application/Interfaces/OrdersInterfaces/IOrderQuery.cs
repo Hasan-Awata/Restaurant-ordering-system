@@ -13,7 +13,7 @@ namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
      
         public Task<Result<int>> GetCountOfOrders();
         public Task<Result<int>> GetCountOfPendingOrder();
-
-        Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page);
+        public Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page);
+        public Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetOrdersByDateRangeAsync(DateTime startDate, DateTime endDate, PageDTO page);
     }
 }

@@ -122,5 +122,40 @@ namespace OrderingSystem.Infrastructure.Queries
             }
         }
 
+        public async Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetOrdersByDateRangeAsync(DateTime startDate, DateTime endDate, PageDTO page)
+        {
+            var query = _context.Orders
+                .AsNoTracking()
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.MenuItem)
+                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate);
+
+            var totalRecords = await query.CountAsync();
+
+            // Use the exact same mapping logic found in GetPendingOrdersAsync
+            var items = await query
+                .OrderByDescending(o => o.CreatedAt)
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(o => new OrderRecords.OrderResponse(
+                    o.OrderId,
+                    o.Session.Table.TableNumber,
+                    o.TotalAmount,
+                    o.OrderStatus,
+                    o.CreatedAt,
+                    o.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
+                        oi.MenuItemId,
+                        oi.MenuItem != null ? oi.MenuItem.NameEn : "Deleted Item",
+                        oi.MenuItem != null ? oi.MenuItem.NameAr : "عنصر محذوف",
+                        oi.Quantity,
+                        oi.UnitPrice,
+                        oi.Notes
+                    )).ToList()
+                ))
+                .ToListAsync();
+
+            var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
+            return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
+        }
     }
 }

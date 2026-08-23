@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
+using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
@@ -15,6 +16,7 @@ namespace OrderingSystem.Controllers
     {
         private readonly IOrderQuery _orderQuery;
         private readonly ITableQuery _tableQuery;
+        private readonly IOrderQuery _orderQuery;
 
         public AdminController(IOrderQuery orderQuery, ITableQuery tableQuery)
         {
@@ -49,6 +51,17 @@ namespace OrderingSystem.Controllers
         public async Task<IActionResult> GetCountOfOccupiedTables()
         {
             var result = await _tableQuery.GetCountOfOccupiedTables();
+            return HandleResult(result);
+        }
+
+        [Authorize(Roles = "Admin")]
+        [HttpGet("historical-orders")]
+        public async Task<IActionResult> GetHistoricalOrders(
+            [FromQuery] DateTime startDate,
+            [FromQuery] DateTime endDate,
+            [FromQuery] PageDTO page)
+        {
+            var result = await _orderQuery.GetOrdersByDateRangeAsync(startDate, endDate, page);
             return HandleResult(result);
         }
 
