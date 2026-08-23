@@ -66,7 +66,6 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\OrderingS
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
-    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="10.0.9" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
 	<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
@@ -95,6 +94,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Program.c
 ----------------------------------------
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpLogging;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
@@ -144,13 +144,18 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
 // ── Rate Limiting ────────────────────────────────────────────────────────
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+});
+
 builder.Services.AddRateLimiter(options =>
 {
     options.AddPolicy("Fixed", httpContext =>
     {
         var partitionKey = httpContext.Request.Cookies["DeviceSessionId"] ??
                            httpContext.Connection.RemoteIpAddress?.ToString() ??
-                           "unknown";
+                           httpContext.TraceIdentifier; 
 
         return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ =>
             new FixedWindowRateLimiterOptions
@@ -358,6 +363,67 @@ using (var scope = app.Services.CreateScope())
     }
 }
 app.Run();
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\AdminController.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
+using OrderingSystem.Application.Interfaces.MenueItem;
+using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.WebApi.Controllers.Base;
+
+namespace OrderingSystem.Controllers
+{
+    [Route("api/Admin")]
+    [ApiController]
+    public class AdminController : BaseController
+    {
+        private readonly IOrderQuery _orderQuery;
+        private readonly ITableQuery _tableQuery;
+
+        public AdminController(IOrderQuery orderQuery, ITableQuery tableQuery)
+        {
+            _orderQuery = orderQuery;
+            _tableQuery = tableQuery;
+        }
+
+         [Authorize(Roles = "Admin,Cashier")]
+          [HttpGet("top-three-today")]
+        public async Task<IActionResult> GetTopThreeItemsToday()
+        {
+            var result = await _orderQuery.GetTopThreeItemsTodayAsync();
+            return HandleResult(result);
+        }
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpGet("pending-count-orders")]
+        public async Task<IActionResult> GetCountOfPendingOrders()
+        {
+            var result = await _orderQuery.GetCountOfPendingOrder();
+            return HandleResult(result);
+        }
+
+       [Authorize(Roles = "Admin,Cashier")]
+        [HttpGet("total-count-orders")]
+        public async Task<IActionResult> GetCountOfOrders()
+        {
+            var result = await _orderQuery.GetCountOfOrders();
+            return HandleResult(result);
+        }
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpGet("total-count-table")]
+        public async Task<IActionResult> GetCountOfOccupiedTables()
+        {
+            var result = await _tableQuery.GetCountOfOccupiedTables();
+            return HandleResult(result);
+        }
+
+    }
+}
+
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\AuthController.cs
@@ -1793,6 +1859,11 @@ namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
 {
     public interface IOrderQuery
     {
+        public Task<Result<List<OrderRecords.OrderItemResponse>>> GetTopThreeItemsTodayAsync();
+     
+        public Task<Result<int>> GetCountOfOrders();
+        public Task<Result<int>> GetCountOfPendingOrder();
+
         Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page);
     }
 }
@@ -1958,6 +2029,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
 ----------------------------------------
 ﻿using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
+using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
 using System;
 using System.Collections.Generic;
@@ -1967,6 +2039,7 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
 {
     public interface ITableQuery
     {
+        public Task<Result<int>> GetCountOfOccupiedTables();
         public Task<string?> GetTableQrCodeAsync(int tableId);
         public Task<TableResponse?> GetTableByIdAsync(int tableId);
         public Task<TableResponse?> GetTableByNumberAsync(int tableNumber, int floorNumber);
@@ -3702,6 +3775,9 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(t => t.Sessions)
                       .HasForeignKey(e => e.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasIndex(s => new { s.TableId, s.ClosedAt })
+                      .HasFilter(@"""ClosedAt"" IS NULL"); 
             });
 
             // 4. Categories
@@ -3730,6 +3806,8 @@ namespace OrderingSystem.Infrastructure.Data
                       .OnDelete(DeleteBehavior.Restrict);
                 
                 entity.HasQueryFilter(e => !e.IsDeleted);
+
+                entity.HasIndex(m => new { m.CategoryId, m.IsAvailable, m.IsDeleted });
             });
 
             // 6. DeviceSession
@@ -3764,6 +3842,8 @@ namespace OrderingSystem.Infrastructure.Data
                       .OnDelete(DeleteBehavior.Restrict);
 
                 entity.HasQueryFilter(e => e.OrderStatus != enOrderStatus.Cancelled);
+
+                entity.HasIndex(o => new { o.OrderStatus, o.CreatedAt });
 
             });
 
@@ -6738,7 +6818,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
 
 
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260713093316_AddSoftDeletFlagsForTableCategoryMenueItem.cs
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260723130018_AddIndexesToTbales.cs
 ----------------------------------------
 ﻿using Microsoft.EntityFrameworkCore.Migrations;
 
@@ -6747,13 +6827,21 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastru
 namespace OrderingSystem.Infrastructure.Migrations
 {
     /// <inheritdoc />
-    public partial class AddSoftDeletFlagsForTableCategoryMenueItem : Migration
+    public partial class AddIndexesToTbales : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropForeignKey(
                 name: "FK_MenuItems_Categories_CategoryId",
+                table: "MenuItems");
+
+            migrationBuilder.DropIndex(
+                name: "IX_TableSessions_TableId",
+                table: "TableSessions");
+
+            migrationBuilder.DropIndex(
+                name: "IX_MenuItems_CategoryId",
                 table: "MenuItems");
 
             migrationBuilder.AddColumn<bool>(
@@ -6777,6 +6865,22 @@ namespace OrderingSystem.Infrastructure.Migrations
                 nullable: false,
                 defaultValue: false);
 
+            migrationBuilder.CreateIndex(
+                name: "IX_TableSessions_TableId_ClosedAt",
+                table: "TableSessions",
+                columns: new[] { "TableId", "ClosedAt" },
+                filter: "\"ClosedAt\" IS NULL");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Orders_OrderStatus_CreatedAt",
+                table: "Orders",
+                columns: new[] { "OrderStatus", "CreatedAt" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_MenuItems_CategoryId_IsAvailable_IsDeleted",
+                table: "MenuItems",
+                columns: new[] { "CategoryId", "IsAvailable", "IsDeleted" });
+
             migrationBuilder.AddForeignKey(
                 name: "FK_MenuItems_Categories_CategoryId",
                 table: "MenuItems",
@@ -6793,6 +6897,18 @@ namespace OrderingSystem.Infrastructure.Migrations
                 name: "FK_MenuItems_Categories_CategoryId",
                 table: "MenuItems");
 
+            migrationBuilder.DropIndex(
+                name: "IX_TableSessions_TableId_ClosedAt",
+                table: "TableSessions");
+
+            migrationBuilder.DropIndex(
+                name: "IX_Orders_OrderStatus_CreatedAt",
+                table: "Orders");
+
+            migrationBuilder.DropIndex(
+                name: "IX_MenuItems_CategoryId_IsAvailable_IsDeleted",
+                table: "MenuItems");
+
             migrationBuilder.DropColumn(
                 name: "IsDeleted",
                 table: "Tables");
@@ -6804,6 +6920,16 @@ namespace OrderingSystem.Infrastructure.Migrations
             migrationBuilder.DropColumn(
                 name: "IsDeleted",
                 table: "Categories");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TableSessions_TableId",
+                table: "TableSessions",
+                column: "TableId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_MenuItems_CategoryId",
+                table: "MenuItems",
+                column: "CategoryId");
 
             migrationBuilder.AddForeignKey(
                 name: "FK_MenuItems_Categories_CategoryId",
@@ -6818,7 +6944,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
 
 
-FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260713093316_AddSoftDeletFlagsForTableCategoryMenueItem.Designer.cs
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260723130018_AddIndexesToTbales.Designer.cs
 ----------------------------------------
 ﻿// <auto-generated />
 using System;
@@ -6834,8 +6960,8 @@ using OrderingSystem.Infrastructure.Data;
 namespace OrderingSystem.Infrastructure.Migrations
 {
     [DbContext(typeof(OrderingSystemDbContext))]
-    [Migration("20260713093316_AddSoftDeletFlagsForTableCategoryMenueItem")]
-    partial class AddSoftDeletFlagsForTableCategoryMenueItem
+    [Migration("20260723130018_AddIndexesToTbales")]
+    partial class AddIndexesToTbales
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -6939,7 +7065,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("MenuItemId");
 
-                    b.HasIndex("CategoryId");
+                    b.HasIndex("CategoryId", "IsAvailable", "IsDeleted");
 
                     b.ToTable("MenuItems");
                 });
@@ -6979,6 +7105,8 @@ namespace OrderingSystem.Infrastructure.Migrations
                     b.HasIndex("DeviceSessionId");
 
                     b.HasIndex("TableSessionId");
+
+                    b.HasIndex("OrderStatus", "CreatedAt");
 
                     b.ToTable("Orders");
                 });
@@ -7079,7 +7207,8 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TableSessionId");
 
-                    b.HasIndex("TableId");
+                    b.HasIndex("TableId", "ClosedAt")
+                        .HasFilter("\"ClosedAt\" IS NULL");
 
                     b.ToTable("TableSessions");
                 });
@@ -7346,7 +7475,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("MenuItemId");
 
-                    b.HasIndex("CategoryId");
+                    b.HasIndex("CategoryId", "IsAvailable", "IsDeleted");
 
                     b.ToTable("MenuItems");
                 });
@@ -7386,6 +7515,8 @@ namespace OrderingSystem.Infrastructure.Migrations
                     b.HasIndex("DeviceSessionId");
 
                     b.HasIndex("TableSessionId");
+
+                    b.HasIndex("OrderStatus", "CreatedAt");
 
                     b.ToTable("Orders");
                 });
@@ -7486,7 +7617,8 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TableSessionId");
 
-                    b.HasIndex("TableId");
+                    b.HasIndex("TableId", "ClosedAt")
+                        .HasFilter("\"ClosedAt\" IS NULL");
 
                     b.ToTable("TableSessions");
                 });
@@ -7965,6 +8097,75 @@ namespace OrderingSystem.Infrastructure.Queries
             var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
             return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
         }
+        public async Task<Result<List<OrderRecords.OrderItemResponse>>> GetTopThreeItemsTodayAsync()
+        {
+            var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
+
+            var rawItems = await _context.OrderItems
+                .AsNoTracking()
+                .Where(oi => oi.Order.CreatedAt.Date == today && oi.Order.OrderStatus != enOrderStatus.Cancelled)
+                .Where(oi => !oi.MenuItem.IsDeleted)
+                .GroupBy(oi => new
+                {
+                    oi.MenuItemId,
+                    oi.MenuItem.NameEn,
+                    oi.MenuItem.NameAr
+                })
+                .Select(g => new
+                {
+                    g.Key.MenuItemId,
+                    g.Key.NameEn,
+                    g.Key.NameAr,
+                    TotalQuantity = g.Sum(oi => oi.Quantity)
+                })
+                .OrderByDescending(r => r.TotalQuantity)
+                .Take(3)
+                .ToListAsync();
+
+            var itemsList = rawItems
+                .Select(x => new OrderRecords.OrderItemResponse(
+                    x.MenuItemId,
+                    x.NameEn,
+                    x.NameAr,
+                    x.TotalQuantity,
+                    0m,
+                    string.Empty
+                ))
+                .ToList();
+
+            return Result<List<OrderRecords.OrderItemResponse>>.Success(itemsList);
+        }
+        public async Task<Result<int>> GetCountOfPendingOrder()
+        {
+            try
+            {
+                var count = await _context.Orders
+                    .Where(o => o.OrderStatus == enOrderStatus.Pending)
+                    .CountAsync();
+
+                return Result<int>.Success(count);
+            }
+            catch (Exception ex)
+            {
+
+                return Result<int>.Failure($"Error when fetching pending order count: {ex.Message}");
+            }
+        }
+        public async Task<Result<int>> GetCountOfOrders()
+        {
+            try
+            {
+
+                var count = await _context.Orders.CountAsync();
+
+                return Result<int>.Success(count);
+            }
+            catch (Exception ex)
+            {
+                return Result<int>.Failure($"Error when fetching total order count: {ex.Message}");
+            }
+        }
+
     }
 }
 
@@ -7975,6 +8176,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastru
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
+using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
 using System.Linq;
@@ -8137,6 +8339,23 @@ namespace OrderingSystem.Infrastructure.Queries
 
             return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
+        public async Task<Result<int>> GetCountOfOccupiedTables()
+        {
+            try
+            {
+
+                var count = await _context.Tables
+                    .Where(t => t.Status == enTableStatus.Occupied)
+                    .CountAsync();
+
+                return Result<int>.Success(count);
+            }
+            catch (Exception ex)
+            {
+                return Result<int>.Failure($"Error when fetching count of occupied tables: {ex.Message}");
+            }
+        }
+
     }
 }
 
