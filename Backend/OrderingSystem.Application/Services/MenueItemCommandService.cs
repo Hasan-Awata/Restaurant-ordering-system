@@ -46,10 +46,11 @@ namespace OrderingSystem.Application.Services
         }
         private readonly IMenueItemRepository _menuItemRepository;
         private readonly ICategoryRepository _categoryRepository;
-        public MenueItemCommandService(IMenueItemRepository menuItemRepository, ICategoryRepository categoryRepository)
+        public MenueItemCommandService(IMenueItemRepository menuItemRepository, ICategoryRepository categoryRepository, IRealTimeNotifier realTimeNotifier)
         {
             _menuItemRepository = menuItemRepository;
             _categoryRepository = categoryRepository;
+            _realTimeNotifier = realTimeNotifier;
         }
         public async Task<Result<MenuRecords.MenuItemResponse>> AddMenuItemAsync(MenuRecords.AddMenuItemRequest request)
         {
