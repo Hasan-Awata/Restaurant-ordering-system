@@ -11,7 +11,7 @@ namespace OrderingSystem.Application.Services
 {
     public class CategoryCommandService : ICategoryCommandService
     {
-        private readonly IRealTimeNotifier realTimeNotifier;
+        private readonly IRealTimeNotifier _realTimeNotifier;
          private Result<CategoriesRecords.CategoryResponse> ValidateCategoryRequest(string nameEn, string nameAr)
         {
             if (string.IsNullOrEmpty(nameAr) || string.IsNullOrEmpty(nameEn))
@@ -24,9 +24,11 @@ namespace OrderingSystem.Application.Services
 
         private readonly ICategoryRepository _categoryRepository;
 
-        public CategoryCommandService(ICategoryRepository categoryRepository)
+        public CategoryCommandService(ICategoryRepository categoryRepository, IRealTimeNotifier realTimeNotifier)
         {
             _categoryRepository = categoryRepository;
+            _realTimeNotifier = realTimeNotifier;
+
         }
 
         public async Task<Result<CategoriesRecords.CategoryResponse>> AddCategoryAsync(CategoriesRecords.AddCategoryRequest request)
@@ -58,7 +60,7 @@ namespace OrderingSystem.Application.Services
             }
 
             await _categoryRepository.AddCategoryAsync(category);
-            await realTimeNotifier.NotifyMenuUpdatedAsync();
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
 
             var response = category.ToResponse();
             return Result<CategoriesRecords.CategoryResponse>.Success(response);
@@ -92,7 +94,7 @@ namespace OrderingSystem.Application.Services
             existingCategory.IsAvailable = request.IsAvailable;
 
             await _categoryRepository.UpdateCategoryAsync(existingCategory);
-            await realTimeNotifier.NotifyMenuUpdatedAsync();
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
 
             var response = existingCategory.ToResponse();
             return Result<CategoriesRecords.CategoryResponse>.Success(response);
@@ -112,7 +114,7 @@ namespace OrderingSystem.Application.Services
             }
 
             await _categoryRepository.DeleteCategoryAsync(existingCategory);
-            await realTimeNotifier.NotifyMenuUpdatedAsync();
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
 
             return Result<bool>.Success(true);
         }
