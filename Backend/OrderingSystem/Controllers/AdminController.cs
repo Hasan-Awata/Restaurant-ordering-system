@@ -16,7 +16,6 @@ namespace OrderingSystem.Controllers
     {
         private readonly IOrderQuery _orderQuery;
         private readonly ITableQuery _tableQuery;
-        private readonly IOrderQuery _orderQuery;
 
         public AdminController(IOrderQuery orderQuery, ITableQuery tableQuery)
         {
