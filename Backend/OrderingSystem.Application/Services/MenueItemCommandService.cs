@@ -1,6 +1,7 @@
 ﻿using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
@@ -14,6 +15,7 @@ namespace OrderingSystem.Application.Services
     public class MenueItemCommandService : IMenueItemCommandService
 
     {
+        private IRealTimeNotifier _realTimeNotifier;
 
         private Result<MenuRecords.MenuItemResponse> ValidateAddMenuItemRequest(int categoryId,string nameEn,string nameAr,string imageUrl,decimal price,string description)
         {
@@ -82,6 +84,8 @@ namespace OrderingSystem.Application.Services
                 return Result<MenuRecords.MenuItemResponse>.Failure("Failed to map request to entity.");
             }
            await _menuItemRepository.AddMenuItemAsync(menuItem);
+           await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             var response = menuItem.ToResponse();
             return Result<MenuRecords.MenuItemResponse>.Success(response);
 
@@ -116,6 +120,8 @@ namespace OrderingSystem.Application.Services
             existingMenuItem.ImageUrl = request.ImageUrl;
             existingMenuItem.IsAvailable = request.IsAvailable;
            await _menuItemRepository.UpdateMenuItemAsync(existingMenuItem);
+           await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             var response = existingMenuItem.ToResponse();
             return Result<MenuRecords.MenuItemResponse>.Success(response);
 
@@ -132,6 +138,8 @@ namespace OrderingSystem.Application.Services
                 return Result<bool>.Failure($"Menu item with ID {request.MenuItemId} not found.");
             }
             await _menuItemRepository.DeleteMenuItemAsync(existingMenuItem);
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             return Result<bool>.Success(true);
         }
         

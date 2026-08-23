@@ -1,5 +1,6 @@
 ﻿using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Category;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Mappers; 
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
@@ -10,6 +11,7 @@ namespace OrderingSystem.Application.Services
 {
     public class CategoryCommandService : ICategoryCommandService
     {
+        private readonly IRealTimeNotifier realTimeNotifier;
          private Result<CategoriesRecords.CategoryResponse> ValidateCategoryRequest(string nameEn, string nameAr)
         {
             if (string.IsNullOrEmpty(nameAr) || string.IsNullOrEmpty(nameEn))
@@ -56,6 +58,7 @@ namespace OrderingSystem.Application.Services
             }
 
             await _categoryRepository.AddCategoryAsync(category);
+            await realTimeNotifier.NotifyMenuUpdatedAsync();
 
             var response = category.ToResponse();
             return Result<CategoriesRecords.CategoryResponse>.Success(response);
@@ -89,6 +92,7 @@ namespace OrderingSystem.Application.Services
             existingCategory.IsAvailable = request.IsAvailable;
 
             await _categoryRepository.UpdateCategoryAsync(existingCategory);
+            await realTimeNotifier.NotifyMenuUpdatedAsync();
 
             var response = existingCategory.ToResponse();
             return Result<CategoriesRecords.CategoryResponse>.Success(response);
@@ -108,6 +112,8 @@ namespace OrderingSystem.Application.Services
             }
 
             await _categoryRepository.DeleteCategoryAsync(existingCategory);
+            await realTimeNotifier.NotifyMenuUpdatedAsync();
+
             return Result<bool>.Success(true);
         }
     }

@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
-using OrderingSystem.Application.DTOs.Paged; // تمت إضافة هذا السطر من أجل PageDTO
+using OrderingSystem.Application.DTOs.Paged; 
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Enums;
 using System.Threading.Tasks;

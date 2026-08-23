@@ -74,5 +74,11 @@ namespace OrderingSystem.Infrastructure.Notifications
             await _hubContext.Clients.Group(tableSessionId.ToString())
                 .ReceiveBillApprovalNotification(tableSessionId, "Your bill has been prepared and approved by the cashier.");
         }
+
+        public async Task NotifyMenuUpdatedAsync()
+        {
+            // Broadcasting to All ensures every active customer app refreshes the menu
+            await _hubContext.Clients.All.ReceiveMenuUpdated("The menu has been updated.");
+        }
     }
 }
