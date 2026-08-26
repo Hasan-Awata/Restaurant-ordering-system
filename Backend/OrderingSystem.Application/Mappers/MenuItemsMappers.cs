@@ -16,7 +16,7 @@ namespace OrderingSystem.Application.Mappers
                 entity.NameEn,        
                 entity.Description,
                 entity.Price,
-                entity.ImageUrl,       
+                entity.Emoji,       
                 entity.IsAvailable
             );
         }
@@ -30,7 +30,7 @@ namespace OrderingSystem.Application.Mappers
                 NameEn = request.NameEn,
                 Description = request.Description,
                 Price = request.Price,
-                ImageUrl = request.ImageUrl,
+                Emoji = request.Emoji,
                 IsAvailable = request.IsAvailable
             };
         }
