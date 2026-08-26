@@ -212,7 +212,8 @@ builder.Services.AddCors(options =>
                 "http://127.0.0.1:5500",
                 "http://localhost:3000",
                 "http://localhost:8080",
-                "https://courageous-pika-0f4f00.netlify.app"
+                "https://courageous-pika-0f4f00.netlify.app",
+                "https://web-five-tau-q7jp0rhb33.vercel.app"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
