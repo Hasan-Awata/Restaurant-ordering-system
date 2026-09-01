@@ -109,6 +109,7 @@ using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Interfaces.TaxesInterfaces;
 using OrderingSystem.Application.Services;
 using OrderingSystem.Infrastructure.Authentication;
 using OrderingSystem.Infrastructure.Data;
@@ -233,6 +234,9 @@ builder.Services.AddScoped<IJwtProvider, JwtProvider>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 builder.Services.AddScoped<IOrderCommandService, OrderCommandService>();
 builder.Services.AddScoped<IOrderQuery, OrderQuery>();
+builder.Services.AddScoped<ITaxRepository, TaxRepository>();
+builder.Services.AddScoped<ITaxCommandService, TaxCommandService>();
+builder.Services.AddScoped<ITaxQuery, TaxQuery>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -1161,6 +1165,70 @@ namespace OrderingSystem.WebApi.Controllers
 }
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TaxesController.cs
+----------------------------------------
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.DTOs.Paged;
+using OrderingSystem.Application.Interfaces.TaxesInterfaces;
+using OrderingSystem.WebApi.Controllers.Base;
+
+namespace OrderingSystem.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/taxes")]
+    [Authorize(Roles = "Admin")] 
+    public class TaxesController : BaseController
+    {
+        private readonly ITaxCommandService _taxCommandService;
+        private readonly ITaxQuery _taxQuery;
+
+        public TaxesController(ITaxCommandService taxCommandService, ITaxQuery taxQuery)
+        {
+            _taxCommandService = taxCommandService;
+            _taxQuery = taxQuery;
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> AddTax([FromBody] TaxRecords.AddTaxRequest request)
+        {
+            var result = await _taxCommandService.AddTaxAsync(request);
+            return HandleCreatedResult(result, nameof(GetTaxById), new { id = result.Value?.TaxId });
+        }
+
+        [HttpPut]
+        public async Task<IActionResult> UpdateTax([FromBody] TaxRecords.UpdateTaxRequest request)
+        {
+            var result = await _taxCommandService.UpdateTaxAsync(request);
+            return HandleResult(result);
+        }
+
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteTax(int id)
+        {
+            var result = await _taxCommandService.DeleteTaxAsync(id);
+            return HandleResult(result);
+        }
+
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetTaxById(int id)
+        {
+            var result = await _taxQuery.GetTaxByIdAsync(id);
+            return HandleResult(result);
+        }
+
+        [HttpGet]
+        [AllowAnonymous] // Or change to [Authorize(Roles = "Admin,Cashier")] based on your needs
+        public async Task<IActionResult> GetAllTaxes([FromQuery] PageDTO page)
+        {
+            var result = await _taxQuery.GetAllTaxesAsync(page);
+            return HandleResult(result);
+        }
+    }
+}
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Middleware\GlobalExceptionHandler.cs
 ----------------------------------------
 ﻿using Microsoft.AspNetCore.Diagnostics;
@@ -1503,6 +1571,7 @@ namespace OrderingSystem.Application.DTOs
     public record DeactivateSessionByAdminRequest([Required] int tableId);
     public record RequestBillRequest([Required] Guid tableSessionId);
     public record ApproveBillRequest([Required] Guid tableSessionId);
+    public record AppliedTaxResponse(string NameEn, string NameAr, decimal Amount);
 
 
     // Query/Command Response Payloads
@@ -1515,7 +1584,7 @@ namespace OrderingSystem.Application.DTOs
         Guid TableSessionId,
         List<GuestBillResponse> GuestBills,
         decimal TotalSubTotal,
-        decimal TaxAmount,
+        List<AppliedTaxResponse> AppliedTaxes, 
         decimal GrandTotal
     );
 }
@@ -1547,6 +1616,21 @@ namespace OrderingSystem.Application.DTOs
     public record PendingTableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status, Guid TableSessionId);
 }
 
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\TaxRecords.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Enums;
+
+namespace OrderingSystem.Application.DTOs
+{
+    public class TaxRecords
+    {
+        public record AddTaxRequest(string NameAr, string NameEn, decimal Amount, enTaxType TaxType, enTaxScope TaxScope, bool IsActive);
+        public record UpdateTaxRequest(int TaxId, string NameAr, string NameEn, decimal Amount, enTaxType TaxType, enTaxScope TaxScope, bool IsActive);
+        public record TaxResponse(int TaxId, string NameAr, string NameEn, decimal Amount, enTaxType TaxType, enTaxScope TaxScope, bool IsActive);
+    }
+}
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\DTOs\Paged\PagedResponse.cs
@@ -2097,6 +2181,66 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
         // Reading methods (for business logic)
         public Task<Table?> GetByNumberAndFloorWithDeletedAsync(int tableNumber, int floor);
         public Task<Table?> GetTableByIdAsync(int tableId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TaxesInterfaces\ITaxCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Common;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TaxesInterfaces
+{
+    public interface ITaxCommandService
+    {
+        Task<Result<TaxRecords.TaxResponse>> AddTaxAsync(TaxRecords.AddTaxRequest request);
+        Task<Result<TaxRecords.TaxResponse>> UpdateTaxAsync(TaxRecords.UpdateTaxRequest request);
+        Task<Result<bool>> DeleteTaxAsync(int taxId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TaxesInterfaces\ITaxQurey.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.DTOs.Paged;
+using OrderingSystem.Domain.Common;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TaxesInterfaces
+{
+    public interface ITaxQuery
+    {
+        Task<Result<PagedResponse<TaxRecords.TaxResponse>>> GetAllTaxesAsync(PageDTO page);
+        Task<Result<TaxRecords.TaxResponse>> GetTaxByIdAsync(int taxId);
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Interfaces\TaxesInterfaces\ITaxRepository.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Entities;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Application.Interfaces.TaxesInterfaces
+{
+    public interface ITaxRepository
+    {
+        Task AddTaxAsync(Tax tax);
+        Task UpdateTaxAsync(Tax tax);
+        Task<Tax?> GetTaxByIdAsync(int taxId);
+        Task<bool> TaxExistsByNameAsync(string nameEn, string nameAr);
     }
 }
 
@@ -3331,6 +3475,65 @@ namespace OrderingSystem.Application.Services
 }
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\TaxCommandService.cs
+----------------------------------------
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.TaxesInterfaces;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+
+public class TaxCommandService : ITaxCommandService
+{
+    private readonly ITaxRepository _taxRepository;
+    public TaxCommandService(ITaxRepository taxRepository) => _taxRepository = taxRepository;
+
+    public async Task<Result<TaxRecords.TaxResponse>> AddTaxAsync(TaxRecords.AddTaxRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.NameEn) || string.IsNullOrWhiteSpace(request.NameAr))
+            return Result<TaxRecords.TaxResponse>.Failure("Names cannot be empty.");
+        if (request.Amount < 0)
+            return Result<TaxRecords.TaxResponse>.Failure("Amount cannot be negative.");
+
+        if (await _taxRepository.TaxExistsByNameAsync(request.NameEn, request.NameAr))
+            return Result<TaxRecords.TaxResponse>.Failure("A tax with this name already exists.", enErrorType.Conflict);
+
+        var tax = new Tax { NameAr = request.NameAr, NameEn = request.NameEn, Amount = request.Amount, TaxType = request.TaxType, TaxScope = request.TaxScope, IsActive = request.IsActive };
+        await _taxRepository.AddTaxAsync(tax);
+
+        return Result<TaxRecords.TaxResponse>.Success(new TaxRecords.TaxResponse(tax.TaxId, tax.NameAr, tax.NameEn, tax.Amount, tax.TaxType, tax.TaxScope, tax.IsActive));
+    }
+
+    public async Task<Result<TaxRecords.TaxResponse>> UpdateTaxAsync(TaxRecords.UpdateTaxRequest request)
+    {
+        var tax = await _taxRepository.GetTaxByIdAsync(request.TaxId);
+        if (tax == null) return Result<TaxRecords.TaxResponse>.Failure("Tax not found.", enErrorType.NotFound);
+
+        tax.NameAr = request.NameAr;
+        tax.NameEn = request.NameEn;
+        tax.Amount = request.Amount;
+        tax.TaxType = request.TaxType;
+        tax.TaxScope = request.TaxScope;
+        tax.IsActive = request.IsActive;
+
+        await _taxRepository.UpdateTaxAsync(tax);
+        return Result<TaxRecords.TaxResponse>.Success(new TaxRecords.TaxResponse(tax.TaxId, tax.NameAr, tax.NameEn, tax.Amount, tax.TaxType, tax.TaxScope, tax.IsActive));
+    }
+
+    public async Task<Result<bool>> DeleteTaxAsync(int taxId)
+    {
+        var tax = await _taxRepository.GetTaxByIdAsync(taxId);
+        if (tax == null) return Result<bool>.Failure("Tax not found.", enErrorType.NotFound);
+
+        tax.IsDeleted = true;
+        tax.IsActive = false;
+        await _taxRepository.UpdateTaxAsync(tax);
+
+        return Result<bool>.Success(true);
+    }
+}
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\OrderingSystem.Domain.csproj
 ----------------------------------------
 ﻿<Project Sdk="Microsoft.NET.Sdk">
@@ -3570,6 +3773,30 @@ namespace OrderingSystem.Domain.Entities
 
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\Tax.cs
+----------------------------------------
+﻿using OrderingSystem.Domain.Enums;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Entities
+{
+    public class Tax
+    {
+        public int TaxId { get; set; }
+        public string NameEn { get; set; } = string.Empty;
+        public string NameAr { get; set; } = string.Empty;
+        public decimal Amount { get; set; } // Can be a flat amount (e.g., 5.00) or percentage (e.g., 15.00)
+        public enTaxType TaxType { get; set; }
+        public enTaxScope TaxScope { get; set; }
+        public bool IsActive { get; set; }
+        public bool IsDeleted { get; set; }
+    }
+}
+
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Entities\User.cs
 ----------------------------------------
 ﻿using System;
@@ -3705,6 +3932,40 @@ namespace OrderingSystem.Domain.Enums
 
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enTaxScope.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enTaxScope
+    {
+        PerBill = 1,     // Applied once per total bill (e.g., Delivery Fee)
+        PerGuest = 2,    // Multiplied by number of active device sessions (e.g., Cover Charge)
+        PerItem = 3      // Multiplied by total quantity of ordered items
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Domain\Enums\enTaxType.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Domain.Enums
+{
+    public enum enTaxType
+    {
+        Percentage = 1,
+        FlatRate = 2
+    }
+}
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\OrderingSystem.Infrastructure.csproj
 ----------------------------------------
 ﻿<Project Sdk="Microsoft.NET.Sdk">
@@ -3761,6 +4022,7 @@ namespace OrderingSystem.Infrastructure.Data
         public DbSet<DeviceSession> SessionDevices { get; set; }
         public DbSet<Order> Orders { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }
+        public DbSet<Tax> Taxes { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -3905,6 +4167,16 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(m => m.OrderItems)
                       .HasForeignKey(e => e.MenuItemId)
                       .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            modelBuilder.Entity<Tax>(entity =>
+            {
+                entity.HasKey(e => e.TaxId);
+                entity.Property(e => e.NameAr).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.NameEn).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.Amount).HasPrecision(18, 2).IsRequired();
+                entity.Property(e => e.IsDeleted).IsRequired();
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
         }
     }
@@ -7405,6 +7677,504 @@ namespace OrderingSystem.Infrastructure.Migrations
 
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260901162129_AddTaxesTable.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    /// <inheritdoc />
+    public partial class AddTaxesTable : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.CreateTable(
+                name: "Taxes",
+                columns: table => new
+                {
+                    TaxId = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    NameEn = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: false),
+                    NameAr = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: false),
+                    Amount = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: false),
+                    TaxType = table.Column<int>(type: "integer", nullable: false),
+                    TaxScope = table.Column<int>(type: "integer", nullable: false),
+                    IsActive = table.Column<bool>(type: "boolean", nullable: false),
+                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Taxes", x => x.TaxId);
+                });
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropTable(
+                name: "Taxes");
+        }
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260901162129_AddTaxesTable.Designer.cs
+----------------------------------------
+﻿// <auto-generated />
+using System;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+using OrderingSystem.Infrastructure.Data;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    [DbContext(typeof(OrderingSystemDbContext))]
+    [Migration("20260901162129_AddTaxesTable")]
+    partial class AddTaxesTable
+    {
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+
+            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Property<int>("CategoryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("CategoryId"));
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.HasKey("CategoryId");
+
+                    b.ToTable("Categories");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Property<Guid>("DeviceSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsApproved")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("SessionDevices");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Property<int>("MenuItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("MenuItemId"));
+
+                    b.Property<int>("CategoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ImageUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<decimal>("Price")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("MenuItemId");
+
+                    b.HasIndex("CategoryId", "IsAvailable", "IsDeleted");
+
+                    b.ToTable("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Property<int>("OrderId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeviceSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("OrderStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("OrderId");
+
+                    b.HasIndex("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.HasIndex("OrderStatus", "CreatedAt");
+
+                    b.ToTable("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.Property<int>("OrderItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderItemId"));
+
+                    b.Property<int>("MenuItemId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("OrderId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("OrderItemId");
+
+                    b.HasIndex("MenuItemId");
+
+                    b.HasIndex("OrderId");
+
+                    b.ToTable("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Property<int>("TableId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TableId"));
+
+                    b.Property<int>("FloorNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("QrCode")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("TableId");
+
+                    b.ToTable("Tables");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Property<Guid>("TableSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableId")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("TableSessionId");
+
+                    b.HasIndex("TableId", "ClosedAt")
+                        .HasFilter("\"ClosedAt\" IS NULL");
+
+                    b.ToTable("TableSessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Tax", b =>
+                {
+                    b.Property<int>("TaxId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TaxId"));
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("TaxScope")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TaxType")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TaxId");
+
+                    b.ToTable("Taxes");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
+                {
+                    b.Property<int>("UserId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("UserId"));
+
+                    b.Property<DateTime?>("AbsoluteRefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RefreshToken")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<DateTime?>("RefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "TableSession")
+                        .WithMany("Devices")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TableSession");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Category", "Category")
+                        .WithMany("MenuItems")
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.DeviceSession", "Device")
+                        .WithMany("Orders")
+                        .HasForeignKey("DeviceSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "Session")
+                        .WithMany("Orders")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.MenuItem", "MenuItem")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("MenuItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.Order", "Order")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("MenuItem");
+
+                    b.Navigation("Order");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Table", "Table")
+                        .WithMany("Sessions")
+                        .HasForeignKey("TableId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Table");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Navigation("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Navigation("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Navigation("Sessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Navigation("Devices");
+
+                    b.Navigation("Orders");
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\OrderingSystemDbContextModelSnapshot.cs
 ----------------------------------------
 ﻿// <auto-generated />
@@ -7669,6 +8439,45 @@ namespace OrderingSystem.Infrastructure.Migrations
                         .HasFilter("\"ClosedAt\" IS NULL");
 
                     b.ToTable("TableSessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Tax", b =>
+                {
+                    b.Property<int>("TaxId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TaxId"));
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("TaxScope")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TaxType")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TaxId");
+
+                    b.ToTable("Taxes");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
@@ -8512,13 +9321,13 @@ namespace OrderingSystem.Infrastructure.Queries
 
             var guestBills = new List<GuestBillResponse>();
             decimal totalSubTotal = 0;
+            int totalItemsQuantity = 0; // Track this for PerItem taxes
 
             foreach (var device in session.Devices)
             {
                 var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
                 if (!deviceOrders.Any()) continue;
 
-                // Flatten items for this device, group by MenuItemId to sum quantities of identical items
                 var groupedItems = deviceOrders
                     .SelectMany(o => o.OrderItems)
                     .GroupBy(oi => oi.MenuItemId)
@@ -8527,31 +9336,116 @@ namespace OrderingSystem.Infrastructure.Queries
                         g.First().MenuItem?.NameEn ?? "Deleted Item",
                         g.First().MenuItem?.NameAr ?? "عنصر محذوف",
                         g.Sum(oi => oi.Quantity),
-                        g.First().UnitPrice, // Using the historical price saved on the OrderItem
+                        g.First().UnitPrice,
                         g.Sum(oi => oi.Quantity * oi.UnitPrice)
                     )).ToList();
 
                 decimal subTotal = groupedItems.Sum(i => i.TotalPrice);
                 totalSubTotal += subTotal;
+                totalItemsQuantity += groupedItems.Sum(i => i.Quantity);
 
                 guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, groupedItems, subTotal));
             }
 
-            // TODO: Replace this with an actual database fetch from the future Taxes table
-            decimal taxRate = 0.15m;
-            decimal taxAmount = totalSubTotal * taxRate;
-            decimal grandTotal = totalSubTotal + taxAmount;
+            // 1. Fetch active taxes dynamically
+            var activeTaxes = await _context.Taxes
+                .AsNoTracking()
+                .Where(t => t.IsActive)
+                .ToListAsync();
+
+            var appliedTaxes = new List<AppliedTaxResponse>();
+            decimal totalTaxAmount = 0;
+
+            // 2. Process each tax based on its Type and Scope
+            foreach (var tax in activeTaxes)
+            {
+                decimal calculatedAmount = 0;
+
+                if (tax.TaxType == enTaxType.Percentage)
+                {
+                    // Percentages apply to the subtotal
+                    calculatedAmount = totalSubTotal * (tax.Amount / 100m);
+                }
+                else if (tax.TaxType == enTaxType.FlatRate)
+                {
+                    switch (tax.TaxScope)
+                    {
+                        case enTaxScope.PerBill:
+                            calculatedAmount = tax.Amount;
+                            break;
+                        case enTaxScope.PerGuest:
+                            calculatedAmount = tax.Amount * session.Devices.Count;
+                            break;
+                        case enTaxScope.PerItem:
+                            calculatedAmount = tax.Amount * totalItemsQuantity;
+                            break;
+                    }
+                }
+
+                if (calculatedAmount > 0)
+                {
+                    appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, calculatedAmount));
+                    totalTaxAmount += calculatedAmount;
+                }
+            }
+
+            decimal grandTotal = totalSubTotal + totalTaxAmount;
 
             return new BillSummaryResponse(
                 session.TableSessionId,
                 guestBills,
                 totalSubTotal,
-                taxAmount,
+                appliedTaxes, 
                 grandTotal
             );
         }
     }
 }
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\TaxQuery.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.DTOs.Paged;
+using OrderingSystem.Application.Interfaces.TaxesInterfaces;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace OrderingSystem.Infrastructure.Queries
+{
+    public class TaxQuery : ITaxQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+        public TaxQuery(OrderingSystemDbContext context) => _context = context;
+
+        public async Task<Result<PagedResponse<TaxRecords.TaxResponse>>> GetAllTaxesAsync(PageDTO page)
+        {
+            var query = _context.Taxes.AsNoTracking();
+            var totalRecords = await query.CountAsync();
+            var items = await query.Skip((page.PageNumber - 1) * page.PageSize).Take(page.PageSize)
+                .Select(t => new TaxRecords.TaxResponse(t.TaxId, t.NameAr, t.NameEn, t.Amount, t.TaxType, t.TaxScope, t.IsActive))
+                .ToListAsync();
+
+            return Result<PagedResponse<TaxRecords.TaxResponse>>.Success(new PagedResponse<TaxRecords.TaxResponse>(items, totalRecords, page.PageNumber, page.PageSize));
+        }
+
+        public async Task<Result<TaxRecords.TaxResponse>> GetTaxByIdAsync(int taxId)
+        {
+            var tax = await _context.Taxes.AsNoTracking()
+                .Where(t => t.TaxId == taxId)
+                .Select(t => new TaxRecords.TaxResponse(t.TaxId, t.NameAr, t.NameEn, t.Amount, t.TaxType, t.TaxScope, t.IsActive))
+                .FirstOrDefaultAsync();
+
+            return tax == null ? Result<TaxRecords.TaxResponse>.Failure("Tax not found.", enErrorType.NotFound) : Result<TaxRecords.TaxResponse>.Success(tax);
+        }
+    }
+}
+
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\CategoryRepository.cs
@@ -8927,6 +9821,42 @@ namespace OrderingSystem.Infrastructure.Repositories
         }
     }
 }
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\TaxRepository.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Data;
+using OrderingSystem.Application.Interfaces.TaxesInterfaces;
+namespace OrderingSystem.Infrastructure.Repositories
+{
+    public class TaxRepository : ITaxRepository
+    {
+        private readonly OrderingSystemDbContext _context;
+        public TaxRepository(OrderingSystemDbContext context) => _context = context;
+
+        public async Task AddTaxAsync(Tax tax)
+        {
+            _context.Taxes.Add(tax);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task UpdateTaxAsync(Tax tax)
+        {
+            _context.Taxes.Update(tax);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task<Tax?> GetTaxByIdAsync(int taxId) =>
+            await _context.Taxes.FirstOrDefaultAsync(t => t.TaxId == taxId);
+
+        public async Task<bool> TaxExistsByNameAsync(string nameEn, string nameAr) =>
+            await _context.Taxes.AnyAsync(t => t.NameEn.ToLower() == nameEn.ToLower() || t.NameAr.ToLower() == nameAr.ToLower());
+    }
+}
+
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Repositories\UserRepository.cs

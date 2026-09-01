@@ -35,9 +35,6 @@ namespace OrderingSystem.Application.Services
 
         public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(string qrCode, Guid? deviceSessionId = null)
         {
-            // PRO-TIP: Ensure this query in TableSessionQuery.cs now uses:
-            // .Include(t => t.Sessions.Where(s => s.Status != enSessionStatus.Closed))
-            // .ThenInclude(s => s.Devices) <--- Add this so we have devices in memory!
             var table = await _tableSessionRepository.GetTableWithActiveSessionAsync(qrCode);
 
             if (table == null)
@@ -49,29 +46,16 @@ namespace OrderingSystem.Application.Services
 
             if (activeSession != null)
             {
-                if (activeSession.Status == enSessionStatus.PendingActivation)
-                {
-                    // Let the recognized Host reconnect to retrieve their session state
-                    if (deviceSessionId.HasValue && activeSession.Devices.Any(d => d.DeviceSessionId == deviceSessionId.Value))
-                    {
-                        return AccessTableSessionAsync(activeSession, deviceSessionId.Value);
-                    }
-
-                    return Result<SessionResponse>.Failure("Table session is pending activation.", enErrorType.Conflict);
-                }
-
-                if (deviceSessionId.HasValue)
+                if (deviceSessionId.HasValue && activeSession.Devices.Any(d => d.DeviceSessionId == deviceSessionId.Value))
                 {
                     return AccessTableSessionAsync(activeSession, deviceSessionId.Value);
                 }
 
-                Guid newGuestDeviceId = Guid.CreateVersion7();
-                return await JoinTableSessionAsync(activeSession, newGuestDeviceId);
+                return await JoinTableSessionAsync(activeSession, Guid.CreateVersion7());
             }
 
-            Guid newHostDeviceId = Guid.CreateVersion7();
             table.Status = enTableStatus.Occupied;
-            return await ActivateTableSessionAsync(table.TableId, newHostDeviceId);
+            return await ActivateTableSessionAsync(table.TableId, Guid.CreateVersion7());
         }
 
         private async Task<Result<SessionResponse>> ActivateTableSessionAsync(int tableId, Guid deviceSessionId)
