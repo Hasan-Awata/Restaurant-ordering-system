@@ -30,4 +30,5 @@ namespace OrderingSystem.Application.DTOs
         List<AppliedTaxResponse> AppliedTaxes, 
         decimal GrandTotal
     );
+    public record SessionPollingResponse(enSessionStatus SessionStatus, bool IsDeviceApproved);
 }

@@ -10,5 +10,6 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
     {
         public Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId);
         public Task<BillSummaryResponse?> GetBillSummaryAsync(Guid tableSessionId);
+        public Task<SessionPollingResponse?> GetSessionPollingStatusAsync(Guid tableSessionId, Guid deviceSessionId);
     }
 }

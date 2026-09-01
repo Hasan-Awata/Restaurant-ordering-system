@@ -125,5 +125,24 @@ namespace OrderingSystem.WebApi.Controllers
 
             return Ok(response);
         }
+
+        [HttpGet("{tableSessionId}/status")]
+        public async Task<IActionResult> GetSessionPollingStatus(Guid tableSessionId)
+        {
+            // التحقق من وجود DeviceSessionId صالح في الـ Cookies
+            if (!CurrentDeviceSessionId.HasValue)
+            {
+                return Unauthorized(new { error = "Invalid or missing device session." });
+            }
+
+            var result = await _sessionQueryService.GetSessionPollingStatusAsync(tableSessionId, CurrentDeviceSessionId.Value);
+
+            if (result == null)
+            {
+                return NotFound(new { error = "Session or device not found." });
+            }
+
+            return Ok(result);
+        }
     }
 }

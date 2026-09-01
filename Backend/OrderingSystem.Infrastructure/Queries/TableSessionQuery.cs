@@ -125,5 +125,17 @@ namespace OrderingSystem.Infrastructure.Queries
                 grandTotal
             );
         }
+        public async Task<SessionPollingResponse?> GetSessionPollingStatusAsync(Guid tableSessionId, Guid deviceSessionId)
+        {
+            // استعلام خفيف جداً ومثالي للـ Polling
+            return await _context.SessionDevices
+                .AsNoTracking()
+                .Where(d => d.DeviceSessionId == deviceSessionId && d.TableSessionId == tableSessionId)
+                .Select(d => new SessionPollingResponse(
+                    d.TableSession.Status,
+                    d.IsApproved
+                ))
+                .FirstOrDefaultAsync();
+        }
     }
 }
