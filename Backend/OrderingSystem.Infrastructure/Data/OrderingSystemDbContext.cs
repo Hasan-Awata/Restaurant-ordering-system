@@ -19,6 +19,7 @@ namespace OrderingSystem.Infrastructure.Data
         public DbSet<DeviceSession> SessionDevices { get; set; }
         public DbSet<Order> Orders { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }
+        public DbSet<Tax> Taxes { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -163,6 +164,16 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(m => m.OrderItems)
                       .HasForeignKey(e => e.MenuItemId)
                       .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            modelBuilder.Entity<Tax>(entity =>
+            {
+                entity.HasKey(e => e.TaxId);
+                entity.Property(e => e.NameAr).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.NameEn).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.Amount).HasPrecision(18, 2).IsRequired();
+                entity.Property(e => e.IsDeleted).IsRequired();
+                entity.HasQueryFilter(e => !e.IsDeleted);
             });
         }
     }

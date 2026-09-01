@@ -14,6 +14,7 @@ namespace OrderingSystem.Application.DTOs
     public record DeactivateSessionByAdminRequest([Required] int tableId);
     public record RequestBillRequest([Required] Guid tableSessionId);
     public record ApproveBillRequest([Required] Guid tableSessionId);
+    public record AppliedTaxResponse(string NameEn, string NameAr, decimal Amount);
 
 
     // Query/Command Response Payloads
@@ -26,7 +27,7 @@ namespace OrderingSystem.Application.DTOs
         Guid TableSessionId,
         List<GuestBillResponse> GuestBills,
         decimal TotalSubTotal,
-        decimal TaxAmount,
+        List<AppliedTaxResponse> AppliedTaxes, 
         decimal GrandTotal
     );
 }

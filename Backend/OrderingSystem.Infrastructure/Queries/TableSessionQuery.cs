@@ -47,13 +47,13 @@ namespace OrderingSystem.Infrastructure.Queries
 
             var guestBills = new List<GuestBillResponse>();
             decimal totalSubTotal = 0;
+            int totalItemsQuantity = 0; // Track this for PerItem taxes
 
             foreach (var device in session.Devices)
             {
                 var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
                 if (!deviceOrders.Any()) continue;
 
-                // Flatten items for this device, group by MenuItemId to sum quantities of identical items
                 var groupedItems = deviceOrders
                     .SelectMany(o => o.OrderItems)
                     .GroupBy(oi => oi.MenuItemId)
@@ -62,26 +62,66 @@ namespace OrderingSystem.Infrastructure.Queries
                         g.First().MenuItem?.NameEn ?? "Deleted Item",
                         g.First().MenuItem?.NameAr ?? "عنصر محذوف",
                         g.Sum(oi => oi.Quantity),
-                        g.First().UnitPrice, // Using the historical price saved on the OrderItem
+                        g.First().UnitPrice,
                         g.Sum(oi => oi.Quantity * oi.UnitPrice)
                     )).ToList();
 
                 decimal subTotal = groupedItems.Sum(i => i.TotalPrice);
                 totalSubTotal += subTotal;
+                totalItemsQuantity += groupedItems.Sum(i => i.Quantity);
 
                 guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, groupedItems, subTotal));
             }
 
-            // TODO: Replace this with an actual database fetch from the future Taxes table
-            decimal taxRate = 0.15m;
-            decimal taxAmount = totalSubTotal * taxRate;
-            decimal grandTotal = totalSubTotal + taxAmount;
+            // 1. Fetch active taxes dynamically
+            var activeTaxes = await _context.Taxes
+                .AsNoTracking()
+                .Where(t => t.IsActive)
+                .ToListAsync();
+
+            var appliedTaxes = new List<AppliedTaxResponse>();
+            decimal totalTaxAmount = 0;
+
+            // 2. Process each tax based on its Type and Scope
+            foreach (var tax in activeTaxes)
+            {
+                decimal calculatedAmount = 0;
+
+                if (tax.TaxType == enTaxType.Percentage)
+                {
+                    // Percentages apply to the subtotal
+                    calculatedAmount = totalSubTotal * (tax.Amount / 100m);
+                }
+                else if (tax.TaxType == enTaxType.FlatRate)
+                {
+                    switch (tax.TaxScope)
+                    {
+                        case enTaxScope.PerBill:
+                            calculatedAmount = tax.Amount;
+                            break;
+                        case enTaxScope.PerGuest:
+                            calculatedAmount = tax.Amount * session.Devices.Count;
+                            break;
+                        case enTaxScope.PerItem:
+                            calculatedAmount = tax.Amount * totalItemsQuantity;
+                            break;
+                    }
+                }
+
+                if (calculatedAmount > 0)
+                {
+                    appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, calculatedAmount));
+                    totalTaxAmount += calculatedAmount;
+                }
+            }
+
+            decimal grandTotal = totalSubTotal + totalTaxAmount;
 
             return new BillSummaryResponse(
                 session.TableSessionId,
                 guestBills,
                 totalSubTotal,
-                taxAmount,
+                appliedTaxes, 
                 grandTotal
             );
         }

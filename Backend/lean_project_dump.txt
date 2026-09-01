@@ -306,7 +306,8 @@ builder.Services.AddCors(options =>
                 "http://127.0.0.1:5500",
                 "http://localhost:3000",
                 "http://localhost:8080",
-                "https://courageous-pika-0f4f00.netlify.app"
+                "https://courageous-pika-0f4f00.netlify.app",
+                "https://web-five-tau-q7jp0rhb33.vercel.app"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
@@ -371,6 +372,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
+using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
@@ -413,11 +415,30 @@ namespace OrderingSystem.Controllers
             var result = await _orderQuery.GetCountOfOrders();
             return HandleResult(result);
         }
+        //  [Authorize(Roles = "Admin,Cashier")]
+        //[HttpGet("total-count-table")]
+        //public async Task<IActionResult> GetCountOfOccupiedTables()
+        //{
+        //    var result = await _tableQuery.GetCountOfOccupiedTables();
+        //    return HandleResult(result);
+        //}
+
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-table")]
-        public async Task<IActionResult> GetCountOfOccupiedTables()
+        public async Task<IActionResult> GetCountOfTaple()
         {
-            var result = await _tableQuery.GetCountOfOccupiedTables();
+            var result = await _tableQuery.GetCountTable();
+            return HandleResult(result);
+        }
+
+        [Authorize(Roles = "Admin")]
+        [HttpGet("historical-orders")]
+        public async Task<IActionResult> GetHistoricalOrders(
+            [FromQuery] DateTime startDate,
+            [FromQuery] DateTime endDate,
+            [FromQuery] PageDTO page)
+        {
+            var result = await _orderQuery.GetOrdersByDateRangeAsync(startDate, endDate, page);
             return HandleResult(result);
         }
 
@@ -878,7 +899,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 ----------------------------------------
 ﻿using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
-using OrderingSystem.Application.DTOs.Paged; // تمت إضافة هذا السطر من أجل PageDTO
+using OrderingSystem.Application.DTOs.Paged; 
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Enums;
 using System.Threading.Tasks;
@@ -1544,12 +1565,12 @@ namespace OrderingSystem.Application.DTOs.Paged
         public int TotalRecords { get; set; }
         public int TotalPages => (int)Math.Ceiling((double)TotalRecords / PageSize);
 
-        public PagedResponse(IEnumerable<T> data, int pageNumber, int pageSize, int totalRecords)
+        public PagedResponse(IEnumerable<T> data, int totalRecords, int pageNumber, int pageSize)
         {
             Data = data;
+            TotalRecords = totalRecords;
             PageNumber = pageNumber;
             PageSize = pageSize;
-            TotalRecords = totalRecords;
         }
     }
 }
@@ -1800,6 +1821,7 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyCashiersOfCustomerCancellationAsync(int orderId, Guid tableSessionId);
         public Task NotifyCashiersOfBillRequestAsync(Guid tableSessionId, int tableNumber);
         public Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId);
+        public Task NotifyMenuUpdatedAsync();
     }
 }
 
@@ -1824,6 +1846,7 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveOrderStatusUpdate(int orderId, enOrderStatus status, string message);
         public Task ReceiveBillRequestNotification(Guid tableSessionId, int tableNumber, string message);
         public Task ReceiveBillApprovalNotification(Guid tableSessionId, string message);
+        public Task ReceiveMenuUpdated(string message);
     }
 }
 
@@ -1863,8 +1886,8 @@ namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
      
         public Task<Result<int>> GetCountOfOrders();
         public Task<Result<int>> GetCountOfPendingOrder();
-
-        Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page);
+        public Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page);
+        public Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetOrdersByDateRangeAsync(DateTime startDate, DateTime endDate, PageDTO page);
     }
 }
 
@@ -2048,6 +2071,8 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
         public Task<PagedResponse<TableResponse>> GetAllTablesByStatusAsync(PageDTO page, enTableStatus tableStatus);
         public Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page);
         public Task<PagedResponse<PendingTableResponse>> GetAllBillingTablesAsync(PageDTO page);
+        public Task  <Result<int>> GetCountTable();
+
     }
 }
 
@@ -2333,6 +2358,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
 ----------------------------------------
 ﻿using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Category;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Mappers; 
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
@@ -2343,6 +2369,7 @@ namespace OrderingSystem.Application.Services
 {
     public class CategoryCommandService : ICategoryCommandService
     {
+        private readonly IRealTimeNotifier _realTimeNotifier;
          private Result<CategoriesRecords.CategoryResponse> ValidateCategoryRequest(string nameEn, string nameAr)
         {
             if (string.IsNullOrEmpty(nameAr) || string.IsNullOrEmpty(nameEn))
@@ -2355,9 +2382,11 @@ namespace OrderingSystem.Application.Services
 
         private readonly ICategoryRepository _categoryRepository;
 
-        public CategoryCommandService(ICategoryRepository categoryRepository)
+        public CategoryCommandService(ICategoryRepository categoryRepository, IRealTimeNotifier realTimeNotifier)
         {
             _categoryRepository = categoryRepository;
+            _realTimeNotifier = realTimeNotifier;
+
         }
 
         public async Task<Result<CategoriesRecords.CategoryResponse>> AddCategoryAsync(CategoriesRecords.AddCategoryRequest request)
@@ -2389,6 +2418,7 @@ namespace OrderingSystem.Application.Services
             }
 
             await _categoryRepository.AddCategoryAsync(category);
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
 
             var response = category.ToResponse();
             return Result<CategoriesRecords.CategoryResponse>.Success(response);
@@ -2422,6 +2452,7 @@ namespace OrderingSystem.Application.Services
             existingCategory.IsAvailable = request.IsAvailable;
 
             await _categoryRepository.UpdateCategoryAsync(existingCategory);
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
 
             var response = existingCategory.ToResponse();
             return Result<CategoriesRecords.CategoryResponse>.Success(response);
@@ -2441,6 +2472,8 @@ namespace OrderingSystem.Application.Services
             }
 
             await _categoryRepository.DeleteCategoryAsync(existingCategory);
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             return Result<bool>.Success(true);
         }
     }
@@ -2543,6 +2576,7 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Applicati
 ﻿using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
@@ -2556,6 +2590,7 @@ namespace OrderingSystem.Application.Services
     public class MenueItemCommandService : IMenueItemCommandService
 
     {
+        private IRealTimeNotifier _realTimeNotifier;
 
         private Result<MenuRecords.MenuItemResponse> ValidateAddMenuItemRequest(int categoryId,string nameEn,string nameAr,string imageUrl,decimal price,string description)
         {
@@ -2586,10 +2621,11 @@ namespace OrderingSystem.Application.Services
         }
         private readonly IMenueItemRepository _menuItemRepository;
         private readonly ICategoryRepository _categoryRepository;
-        public MenueItemCommandService(IMenueItemRepository menuItemRepository, ICategoryRepository categoryRepository)
+        public MenueItemCommandService(IMenueItemRepository menuItemRepository, ICategoryRepository categoryRepository, IRealTimeNotifier realTimeNotifier)
         {
             _menuItemRepository = menuItemRepository;
             _categoryRepository = categoryRepository;
+            _realTimeNotifier = realTimeNotifier;
         }
         public async Task<Result<MenuRecords.MenuItemResponse>> AddMenuItemAsync(MenuRecords.AddMenuItemRequest request)
         {
@@ -2624,6 +2660,8 @@ namespace OrderingSystem.Application.Services
                 return Result<MenuRecords.MenuItemResponse>.Failure("Failed to map request to entity.");
             }
            await _menuItemRepository.AddMenuItemAsync(menuItem);
+           await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             var response = menuItem.ToResponse();
             return Result<MenuRecords.MenuItemResponse>.Success(response);
 
@@ -2658,6 +2696,8 @@ namespace OrderingSystem.Application.Services
             existingMenuItem.ImageUrl = request.ImageUrl;
             existingMenuItem.IsAvailable = request.IsAvailable;
            await _menuItemRepository.UpdateMenuItemAsync(existingMenuItem);
+           await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             var response = existingMenuItem.ToResponse();
             return Result<MenuRecords.MenuItemResponse>.Success(response);
 
@@ -2674,6 +2714,8 @@ namespace OrderingSystem.Application.Services
                 return Result<bool>.Failure($"Menu item with ID {request.MenuItemId} not found.");
             }
             await _menuItemRepository.DeleteMenuItemAsync(existingMenuItem);
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             return Result<bool>.Success(true);
         }
         
@@ -3946,6 +3988,12 @@ namespace OrderingSystem.Infrastructure.Notifications
             // Broadcast to the entire table session group so all devices at the table know the bill is ready
             await _hubContext.Clients.Group(tableSessionId.ToString())
                 .ReceiveBillApprovalNotification(tableSessionId, "Your bill has been prepared and approved by the cashier.");
+        }
+
+        public async Task NotifyMenuUpdatedAsync()
+        {
+            // Broadcasting to All ensures every active customer app refreshes the menu
+            await _hubContext.Clients.All.ReceiveMenuUpdated("The menu has been updated.");
         }
     }
 }
@@ -8166,6 +8214,41 @@ namespace OrderingSystem.Infrastructure.Queries
             }
         }
 
+        public async Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetOrdersByDateRangeAsync(DateTime startDate, DateTime endDate, PageDTO page)
+        {
+            var query = _context.Orders
+                .AsNoTracking()
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.MenuItem)
+                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate);
+
+            var totalRecords = await query.CountAsync();
+
+            // Use the exact same mapping logic found in GetPendingOrdersAsync
+            var items = await query
+                .OrderByDescending(o => o.CreatedAt)
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(o => new OrderRecords.OrderResponse(
+                    o.OrderId,
+                    o.Session.Table.TableNumber,
+                    o.TotalAmount,
+                    o.OrderStatus,
+                    o.CreatedAt,
+                    o.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
+                        oi.MenuItemId,
+                        oi.MenuItem != null ? oi.MenuItem.NameEn : "Deleted Item",
+                        oi.MenuItem != null ? oi.MenuItem.NameAr : "عنصر محذوف",
+                        oi.Quantity,
+                        oi.UnitPrice,
+                        oi.Notes
+                    )).ToList()
+                ))
+                .ToListAsync();
+
+            var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
+            return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
+        }
     }
 }
 
@@ -8356,8 +8439,26 @@ namespace OrderingSystem.Infrastructure.Queries
             }
         }
 
+
+        public async Task<Result<int>> GetCountTable()
+        {
+            try
+            {
+                var count = await _context.Tables
+                    .AsNoTracking()
+                    .Where(t => !t.IsDeleted) // في حال أردت استثناء الطاولات المحذوفة
+                    .CountAsync();
+
+                return Result<int>.Success(count);
+            }
+            catch (Exception ex)
+            {
+                return Result<int>.Failure($"Error when fetching count of tables: {ex.Message}");
+            }
+        }
     }
 }
+
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\TableSessionQuery.cs

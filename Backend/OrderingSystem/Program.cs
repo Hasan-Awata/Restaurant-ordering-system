@@ -15,6 +15,7 @@ using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Interfaces.TaxesInterfaces;
 using OrderingSystem.Application.Services;
 using OrderingSystem.Infrastructure.Authentication;
 using OrderingSystem.Infrastructure.Data;
@@ -139,6 +140,9 @@ builder.Services.AddScoped<IJwtProvider, JwtProvider>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 builder.Services.AddScoped<IOrderCommandService, OrderCommandService>();
 builder.Services.AddScoped<IOrderQuery, OrderQuery>();
+builder.Services.AddScoped<ITaxRepository, TaxRepository>();
+builder.Services.AddScoped<ITaxCommandService, TaxCommandService>();
+builder.Services.AddScoped<ITaxQuery, TaxQuery>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
