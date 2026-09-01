@@ -99,13 +99,16 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.Price).HasPrecision(18, 2);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
+
+                 entity.Property(e => e.Emoji).HasMaxLength(50).IsRequired(false);
+
                 entity.Property(e => e.IsDeleted).IsRequired();
-             
+
                 entity.HasOne(e => e.Category)
                       .WithMany(c => c.MenuItems)
                       .HasForeignKey(e => e.CategoryId)
                       .OnDelete(DeleteBehavior.Restrict);
-                
+
                 entity.HasQueryFilter(e => !e.IsDeleted);
 
                 entity.HasIndex(m => new { m.CategoryId, m.IsAvailable, m.IsDeleted });
