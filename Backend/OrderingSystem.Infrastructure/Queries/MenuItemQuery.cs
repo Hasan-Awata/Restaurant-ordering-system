@@ -21,7 +21,6 @@ namespace OrderingSystem.Infrastructure.Queries
             _context = context;
         }
 
-     
         public async Task<Result<MenuRecords.MenuItemResponse>> GetMenuItemAsync(int menuItemId)
         {
             var menuItem = await _context.MenuItems
@@ -48,7 +47,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<MenuRecords.MenuItemResponse>.Success(menuItem);
         }
 
-        
         public async Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllMenuItemsByCategoryAsync(int categoryId, PageDTO page)
         {
             var query = _context.MenuItems
@@ -77,7 +75,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<MenuRecords.MenuItemResponse>>.Success(pagedResponse);
         }
 
-     
         public async Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllMenuItemsAsync(PageDTO page)
         {
             var query = _context.MenuItems.AsNoTracking();
@@ -103,7 +100,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<MenuRecords.MenuItemResponse>>.Success(pagedResponse);
         }
 
-    
         public async Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllAvailableMenuItemsAsync(PageDTO page)
         {
             var query = _context.MenuItems
@@ -132,10 +128,43 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<MenuRecords.MenuItemResponse>>.Success(pagedResponse);
         }
 
-      
         public async Task<Result<MenuRecords.MenuItemResponse>> GetItemByIdAsync(int menuItemId)
         {
             return await GetMenuItemAsync(menuItemId);
+        }
+
+         public async Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> SearchMenuItemsAsync(string queryText, PageDTO page)
+        {
+            var query = _context.MenuItems.AsNoTracking();
+
+            if (!string.IsNullOrWhiteSpace(queryText))
+            {
+                query = query.Where(m =>
+                    m.NameAr.Contains(queryText) ||
+                    m.NameEn.Contains(queryText) ||
+                    m.Description.Contains(queryText));
+            }
+
+            var totalRecords = await query.CountAsync();
+
+            var items = await query
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(m => new MenuRecords.MenuItemResponse
+                (
+                    m.MenuItemId,
+                    m.CategoryId,
+                    m.NameAr,
+                    m.NameEn,
+                    m.Description,
+                    m.Price,
+                    m.Emoji,
+                    m.IsAvailable
+                ))
+                .ToListAsync();
+
+            var pagedResponse = new PagedResponse<MenuRecords.MenuItemResponse>(items, totalRecords, page.PageNumber, page.PageSize);
+            return Result<PagedResponse<MenuRecords.MenuItemResponse>>.Success(pagedResponse);
         }
     }
 }

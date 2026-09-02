@@ -5,6 +5,7 @@ using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
+using System;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -62,7 +63,7 @@ namespace OrderingSystem.Infrastructure.Queries
             return table;
         }
 
-          public async Task<PagedResponse<TableResponse>> GetAllTablesByFloorAsync(PageDTO page, int floorNumber)
+        public async Task<PagedResponse<TableResponse>> GetAllTablesByFloorAsync(PageDTO page, int floorNumber)
         {
             var query = _context.Tables
                 .AsNoTracking()
@@ -78,7 +79,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
 
-        
         public async Task<PagedResponse<TableResponse>> GetAllTablesAsync(PageDTO page)
         {
             var query = _context.Tables.AsNoTracking();
@@ -93,7 +93,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
 
-    
         public async Task<PagedResponse<TableResponse>> GetAllTablesByStatusAsync(PageDTO page, enTableStatus tableStatus)
         {
             var query = _context.Tables
@@ -111,7 +110,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
 
-    
         public async Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page)
         {
             var query = _context.Tables
@@ -132,6 +130,10 @@ namespace OrderingSystem.Infrastructure.Queries
                         t.Sessions
                             .Where(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null)
                             .Select(s => s.TableSessionId)
+                            .FirstOrDefault(),
+                        t.Sessions
+                            .Where(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null)
+                            .Select(s => (DateTime?)s.CreatedAt)
                             .FirstOrDefault()
                     ))
                     .ToListAsync();
@@ -159,17 +161,21 @@ namespace OrderingSystem.Infrastructure.Queries
                         t.Sessions
                             .Where(s => s.ClosedAt == null)
                             .Select(s => s.TableSessionId)
+                            .FirstOrDefault(),
+                        t.Sessions
+                            .Where(s => s.ClosedAt == null)
+                            .Select(s => (DateTime?)s.CreatedAt)
                             .FirstOrDefault()
                     ))
                     .ToListAsync();
 
             return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
+
         public async Task<Result<int>> GetCountOfOccupiedTables()
         {
             try
             {
-
                 var count = await _context.Tables
                     .Where(t => t.Status == enTableStatus.Occupied)
                     .CountAsync();
@@ -182,14 +188,13 @@ namespace OrderingSystem.Infrastructure.Queries
             }
         }
 
-
         public async Task<Result<int>> GetCountTable()
         {
             try
             {
                 var count = await _context.Tables
                     .AsNoTracking()
-                    .Where(t => !t.IsDeleted) // في حال أردت استثناء الطاولات المحذوفة
+                    .Where(t => !t.IsDeleted)
                     .CountAsync();
 
                 return Result<int>.Success(count);

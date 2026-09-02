@@ -42,6 +42,6 @@ namespace OrderingSystem.Application.DTOs
              bool IsAvailable
 
 );
-
+        
     }
 }

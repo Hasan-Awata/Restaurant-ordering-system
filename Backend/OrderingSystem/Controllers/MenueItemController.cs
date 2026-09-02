@@ -86,5 +86,13 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetAllAvailableMenuItemsAsync(page);
             return HandleResult(result);
         }
+
+       
+        [HttpGet("search")]
+        public async Task<IActionResult> SearchMenuItems([FromQuery] string query, [FromQuery] PageDTO page)
+        {
+            var result = await _menuItemQueryService.SearchMenuItemsAsync(query, page);
+            return HandleResult(result);
+        }
     }
 }

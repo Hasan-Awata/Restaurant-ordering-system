@@ -18,6 +18,27 @@ namespace OrderingSystem.Application.DTOs
 
         public record OrderResponse(int OrderId, int TableNumber, decimal TotalAmount, enOrderStatus OrderStatus, DateTime CreatedAt, List<OrderItemResponse> Items);
         public record OrderItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice, string Notes);
+
+        
+        public record HistoricalBillResponse(
+        string OrderId,
+        int TableNumber,
+        string Status,
+        DateTime CreatedAt,
+        decimal TotalAmount,
+        List<BillItemResponse> Items
+         );
+
+        public record BillItemResponse(
+            int MenuItemId,
+            string NameAr,
+            string NameEn,
+            int Quantity,
+            decimal UnitPrice,
+            decimal TotalPrice
+        );
+
+
     }
 
 }

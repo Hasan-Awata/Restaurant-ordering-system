@@ -5,8 +5,11 @@ using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using static OrderingSystem.Application.DTOs.OrderRecords;
 
 namespace OrderingSystem.Infrastructure.Queries
 {
@@ -41,8 +44,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     o.CreatedAt,
                     o.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
                         oi.MenuItemId,
-                        oi.MenuItem != null ? oi.MenuItem.NameEn : "Deleted Item", // Safe null check
-                        oi.MenuItem != null ? oi.MenuItem.NameAr : "عنصر محذوف",  // Safe null check
+                        oi.MenuItem != null ? oi.MenuItem.NameEn : "Deleted Item",
+                        oi.MenuItem != null ? oi.MenuItem.NameAr : "عنصر محذوف",
                         oi.Quantity,
                         oi.UnitPrice,
                         oi.Notes
@@ -53,6 +56,7 @@ namespace OrderingSystem.Infrastructure.Queries
             var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
             return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
         }
+
         public async Task<Result<List<OrderRecords.OrderItemResponse>>> GetTopThreeItemsTodayAsync()
         {
             var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
@@ -91,6 +95,7 @@ namespace OrderingSystem.Infrastructure.Queries
 
             return Result<List<OrderRecords.OrderItemResponse>>.Success(itemsList);
         }
+
         public async Task<Result<int>> GetCountOfPendingOrder()
         {
             try
@@ -103,15 +108,14 @@ namespace OrderingSystem.Infrastructure.Queries
             }
             catch (Exception ex)
             {
-
                 return Result<int>.Failure($"Error when fetching pending order count: {ex.Message}");
             }
         }
+
         public async Task<Result<int>> GetCountOfOrders()
         {
             try
             {
-
                 var count = await _context.Orders.CountAsync();
 
                 return Result<int>.Success(count);
@@ -132,7 +136,6 @@ namespace OrderingSystem.Infrastructure.Queries
 
             var totalRecords = await query.CountAsync();
 
-            // Use the exact same mapping logic found in GetPendingOrdersAsync
             var items = await query
                 .OrderByDescending(o => o.CreatedAt)
                 .Skip((page.PageNumber - 1) * page.PageSize)
@@ -156,6 +159,47 @@ namespace OrderingSystem.Infrastructure.Queries
 
             var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
             return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
+        }
+
+        // ---------- الدالة المعدلة لسجل الفواتير ----------
+        public async Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(
+            DateTime startDate,
+            DateTime endDate,
+            PageDTO page)
+        {
+            var query = _context.Orders
+                .AsNoTracking()
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.MenuItem)
+                .Include(o => o.Session)
+                    .ThenInclude(s => s.Table)
+                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate);
+
+            var totalRecords = await query.CountAsync();
+
+            var items = await query
+                .OrderByDescending(o => o.CreatedAt)
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(o => new HistoricalBillResponse(
+                    $"BILL-{o.OrderId}",
+                    o.Session != null && o.Session.Table != null ? o.Session.Table.TableNumber : 0,
+                    o.OrderStatus.ToString().ToLower(),
+                    o.CreatedAt,
+                    o.TotalAmount,
+                    o.OrderItems.Select(i => new OrderingSystem.Application.DTOs.OrderRecords.BillItemResponse(
+                        i.MenuItemId,
+                        i.MenuItem != null ? i.MenuItem.NameAr : "عنصر محذوف",
+                        i.MenuItem != null ? i.MenuItem.NameEn : "Deleted Item",
+                        i.Quantity,
+                        i.UnitPrice,
+                        i.Quantity * i.UnitPrice
+                    )).ToList()
+                ))
+                .ToListAsync();
+
+            var pagedResponse = new PagedResponse<HistoricalBillResponse>(items, totalRecords, page.PageNumber, page.PageSize);
+            return Result<PagedResponse<HistoricalBillResponse>>.Success(pagedResponse);
         }
     }
 }
