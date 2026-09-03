@@ -220,7 +220,7 @@ builder.Services.AddCors(options =>
                 "https://web-five-tau-q7jp0rhb33.vercel.app"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
+               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent", "x-device-session-id")
                .AllowCredentials());
 });
 

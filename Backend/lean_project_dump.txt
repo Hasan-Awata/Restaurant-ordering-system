@@ -1161,6 +1161,25 @@ namespace OrderingSystem.WebApi.Controllers
 
             return Ok(response);
         }
+
+        [HttpGet("{tableSessionId}/status")]
+        public async Task<IActionResult> GetSessionPollingStatus(Guid tableSessionId)
+        {
+            // التحقق من وجود DeviceSessionId صالح في الـ Cookies
+            if (!CurrentDeviceSessionId.HasValue)
+            {
+                return Unauthorized(new { error = "Invalid or missing device session." });
+            }
+
+            var result = await _sessionQueryService.GetSessionPollingStatusAsync(tableSessionId, CurrentDeviceSessionId.Value);
+
+            if (result == null)
+            {
+                return NotFound(new { error = "Session or device not found." });
+            }
+
+            return Ok(result);
+        }
     }
 }
 
@@ -1587,6 +1606,7 @@ namespace OrderingSystem.Application.DTOs
         List<AppliedTaxResponse> AppliedTaxes, 
         decimal GrandTotal
     );
+    public record SessionPollingResponse(enSessionStatus SessionStatus, bool IsDeviceApproved);
 }
 
 
@@ -2085,6 +2105,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
     {
         public Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId);
         public Task<BillSummaryResponse?> GetBillSummaryAsync(Guid tableSessionId);
+        public Task<SessionPollingResponse?> GetSessionPollingStatusAsync(Guid tableSessionId, Guid deviceSessionId);
     }
 }
 
@@ -10283,6 +10304,18 @@ namespace OrderingSystem.Infrastructure.Queries
                 appliedTaxes, 
                 grandTotal
             );
+        }
+        public async Task<SessionPollingResponse?> GetSessionPollingStatusAsync(Guid tableSessionId, Guid deviceSessionId)
+        {
+            // استعلام خفيف جداً ومثالي للـ Polling
+            return await _context.SessionDevices
+                .AsNoTracking()
+                .Where(d => d.DeviceSessionId == deviceSessionId && d.TableSessionId == tableSessionId)
+                .Select(d => new SessionPollingResponse(
+                    d.TableSession.Status,
+                    d.IsApproved
+                ))
+                .FirstOrDefaultAsync();
         }
     }
 }

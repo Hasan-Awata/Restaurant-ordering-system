@@ -33,11 +33,20 @@ namespace OrderingSystem.WebApi.Controllers.Base
         {
             get
             {
+                // 1. Try to read the device session from the Cookies (default for most browsers)
                 if (Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) &&
                     Guid.TryParse(cookieValue, out var deviceSessionId))
                 {
                     return deviceSessionId;
                 }
+
+                // 2. Try to read from the Header (fallback for iPhone/Safari)
+                if (Request.Headers.TryGetValue("x-device-session-id", out var headerValue) &&
+                    Guid.TryParse(headerValue, out var headerSessionId))
+                {
+                    return headerSessionId;
+                }
+
                 return null;
             }
         }
