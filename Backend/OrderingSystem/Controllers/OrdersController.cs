@@ -68,5 +68,16 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _orderQuery.GetPendingOrdersAsync(page);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpGet("historical-bills")]
+        public async Task<IActionResult> GetHistoricalBills(
+         [FromQuery] DateTime startDate,
+         [FromQuery] DateTime endDate,
+             [FromQuery] PageDTO page)
+        {
+            var result = await _orderQuery.GetHistoricalBillsAsync(startDate, endDate, page);
+            return HandleResult(result);
+        }
+
     }
 }
