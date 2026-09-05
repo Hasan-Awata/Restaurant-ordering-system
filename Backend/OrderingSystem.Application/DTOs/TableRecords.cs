@@ -17,6 +17,14 @@ namespace OrderingSystem.Application.DTOs
         [Required] enTableStatus Status);
 
     // Query/Command Response Payloads
-    public record TableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status);
+    public record TableResponse(
+        int TableId,
+        int TableNumber,
+        int FloorNumber,
+        string QrCode,
+        enTableStatus Status,
+        Guid? TableSessionId = null 
+    );
+    
     public record PendingTableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status, Guid TableSessionId, DateTime? CreatedAt);
 }

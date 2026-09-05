@@ -18,25 +18,21 @@ namespace OrderingSystem.Application.Services
 
         public async Task<Result<TableResponse>> AddTableAsync(AddTableRequest request)
         {
-            // Business Rule: Check if table number on that floor already exists
             var existingTable = await _tableRepository.GetByNumberAndFloorWithDeletedAsync(request.TableNumber, request.FloorNumber);
 
             if (existingTable != null)
             {
                 if (!existingTable.IsDeleted)
                 {
-                    // The table exists and is active
                     return Result<TableResponse>.Failure(
                         $"Table {request.TableNumber} already exists on Floor {request.FloorNumber}.",
                         enErrorType.Validation);
                 }
 
-                // 2. Delegate to the private restore method
                 var restoredResponse = await RestoreTableAsync(existingTable, request);
                 return Result<TableResponse>.Success(restoredResponse);
             }
 
-            // Generate unique QR Code payload
             string uniqueSegment = RandomNumberGenerator.GetHexString(4);
             string generatedQrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{uniqueSegment}".ToUpper();
 
@@ -50,8 +46,8 @@ namespace OrderingSystem.Application.Services
 
             await _tableRepository.AddTableAsync(newTable);
 
-            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status);
-            
+            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status, null);
+
             return Result<TableResponse>.Success(response);
         }
 
@@ -63,7 +59,6 @@ namespace OrderingSystem.Application.Services
                 return Result<TableResponse>.Failure("Table not found.", enErrorType.NotFound);
             }
 
-            // If changing floor/number, ensure no conflict
             if ((table.TableNumber != request.TableNumber || table.FloorNumber != request.FloorNumber) &&
                 await _tableRepository.ExistsAsync(request.TableNumber, request.FloorNumber))
             {
@@ -74,11 +69,9 @@ namespace OrderingSystem.Application.Services
             table.FloorNumber = request.FloorNumber;
             table.Status = request.Status;
 
-            // Note: We deliberately do NOT update the QR code here, as the physical QR sticker on the table shouldn't break.
-
             await _tableRepository.UpdateTableAsync(table);
 
-            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status);
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null);
             return Result<TableResponse>.Success(response);
         }
 
@@ -90,7 +83,6 @@ namespace OrderingSystem.Application.Services
                 return Result.Failure("Table not found.", enErrorType.NotFound);
             }
 
-            // Optional Business Rule: Check if table has active sessions before deleting
             if (table.Status != enTableStatus.Available)
             {
                 return Result.Failure("Cannot delete a table that is currently occupied or billing.", enErrorType.Validation);
@@ -108,13 +100,12 @@ namespace OrderingSystem.Application.Services
                 return Result<TableResponse>.Failure("Table was not found.", enErrorType.NotFound);
             }
 
-            // Regenerate the QR Code for security so old printed codes become invalid
             string newUniqueSegment = RandomNumberGenerator.GetHexString(4);
             table.QrCode = $"TBL-F{table.FloorNumber}-N{table.TableNumber}-{newUniqueSegment}".ToUpper();
 
             await _tableRepository.UpdateTableAsync(table);
 
-            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status);
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null);
             return Result<TableResponse>.Success(response);
         }
 
@@ -123,7 +114,6 @@ namespace OrderingSystem.Application.Services
             existingTable.IsDeleted = false;
             existingTable.Status = enTableStatus.Available;
 
-            // Regenerate the QR Code for security so old printed codes become invalid
             string newUniqueSegment = RandomNumberGenerator.GetHexString(4);
             existingTable.QrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{newUniqueSegment}".ToUpper();
 
@@ -134,7 +124,8 @@ namespace OrderingSystem.Application.Services
                 existingTable.TableNumber,
                 existingTable.FloorNumber,
                 existingTable.QrCode,
-                existingTable.Status
+                existingTable.Status,
+                null
             );
         }
     }

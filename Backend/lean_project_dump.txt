@@ -314,7 +314,7 @@ builder.Services.AddCors(options =>
                 "https://web-five-tau-q7jp0rhb33.vercel.app"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent")
+               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent", "x-device-session-id")
                .AllowCredentials());
 });
 
@@ -549,11 +549,20 @@ namespace OrderingSystem.WebApi.Controllers.Base
         {
             get
             {
+                // 1. Try to read the device session from the Cookies (default for most browsers)
                 if (Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) &&
                     Guid.TryParse(cookieValue, out var deviceSessionId))
                 {
                     return deviceSessionId;
                 }
+
+                // 2. Try to read from the Header (fallback for iPhone/Safari)
+                if (Request.Headers.TryGetValue("x-device-session-id", out var headerValue) &&
+                    Guid.TryParse(headerValue, out var headerSessionId))
+                {
+                    return headerSessionId;
+                }
+
                 return null;
             }
         }
@@ -819,6 +828,14 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetAllAvailableMenuItemsAsync(page);
             return HandleResult(result);
         }
+
+       
+        [HttpGet("search")]
+        public async Task<IActionResult> SearchMenuItems([FromQuery] string query, [FromQuery] PageDTO page)
+        {
+            var result = await _menuItemQueryService.SearchMenuItemsAsync(query, page);
+            return HandleResult(result);
+        }
     }
 }
 
@@ -895,6 +912,17 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _orderQuery.GetPendingOrdersAsync(page);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpGet("historical-bills")]
+        public async Task<IActionResult> GetHistoricalBills(
+         [FromQuery] DateTime startDate,
+         [FromQuery] DateTime endDate,
+             [FromQuery] PageDTO page)
+        {
+            var result = await _orderQuery.GetHistoricalBillsAsync(startDate, endDate, page);
+            return HandleResult(result);
+        }
+
     }
 }
 
@@ -1540,7 +1568,7 @@ namespace OrderingSystem.Application.DTOs
              bool IsAvailable
 
 );
-
+        
     }
 }
 
@@ -1568,7 +1596,29 @@ namespace OrderingSystem.Application.DTOs
 
         public record OrderResponse(int OrderId, int TableNumber, decimal TotalAmount, enOrderStatus OrderStatus, DateTime CreatedAt, List<OrderItemResponse> Items);
         public record OrderItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice, string Notes);
+
+        
+        public record HistoricalBillResponse(
+        string OrderId,
+        int TableNumber,
+        string Status,
+        DateTime CreatedAt,
+        decimal TotalAmount,
+        List<BillItemResponse> Items
+         );
+
+        public record BillItemResponse(
+            int MenuItemId,
+            string NameAr,
+            string NameEn,
+            int Quantity,
+            decimal UnitPrice,
+            decimal TotalPrice
+        );
+
+
     }
+
 }
 
 
@@ -1633,7 +1683,7 @@ namespace OrderingSystem.Application.DTOs
 
     // Query/Command Response Payloads
     public record TableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status);
-    public record PendingTableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status, Guid TableSessionId);
+    public record PendingTableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status, Guid TableSessionId, DateTime? CreatedAt);
 }
 
 
@@ -1868,7 +1918,7 @@ namespace OrderingSystem.Application.Interfaces.MenueItem
         public Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllMenuItemsAsync(PageDTO page);
          public Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllAvailableMenuItemsAsync(PageDTO page);
         public Task<Result<MenuRecords.MenuItemResponse>> GetItemByIdAsync(int menuItemId);
-       
+       public Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> SearchMenuItemsAsync(string query, PageDTO page);
 
 
 
@@ -1981,6 +2031,7 @@ using OrderingSystem.Domain.Common;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using static OrderingSystem.Application.DTOs.OrderRecords;
 
 namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
 {
@@ -1992,6 +2043,10 @@ namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
         public Task<Result<int>> GetCountOfPendingOrder();
         public Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page);
         public Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetOrdersByDateRangeAsync(DateTime startDate, DateTime endDate, PageDTO page);
+      public   Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(
+            DateTime startDate,
+            DateTime endDate,
+            PageDTO page);
     }
 }
 
@@ -4320,17 +4375,14 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
             // 2. Check Query String OR Cookie (Customer Authentication)
             if (!isAuthenticated && httpContext != null)
             {
+                // 1. Try to read the device session from the Query String (Important for Iphone/Safari)
+                string? deviceIdStr = httpContext.Request.Query["deviceSessionId"];
 
-                httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out string? deviceIdStr);
-
-                //// First try to grab the DeviceSessionId from the Query String 
-                //string? deviceIdStr = httpContext.Request.Query["DeviceSessionId"];
-
-                //// Fallback to Cookie if it's missing from the Query String
-                //if (string.IsNullOrEmpty(deviceIdStr))
-                //{
-                //    httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out deviceIdStr);
-                //}
+                // 2. If not in the Query String, search in the Cookie (for Android/Chrome)
+                if (string.IsNullOrEmpty(deviceIdStr))
+                {
+                    httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out deviceIdStr);
+                }
 
                 if (!string.IsNullOrEmpty(deviceIdStr) && Guid.TryParse(deviceIdStr, out var deviceSessionId))
                 {
@@ -9683,7 +9735,6 @@ namespace OrderingSystem.Infrastructure.Queries
             _context = context;
         }
 
-     
         public async Task<Result<MenuRecords.MenuItemResponse>> GetMenuItemAsync(int menuItemId)
         {
             var menuItem = await _context.MenuItems
@@ -9710,7 +9761,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<MenuRecords.MenuItemResponse>.Success(menuItem);
         }
 
-        
         public async Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllMenuItemsByCategoryAsync(int categoryId, PageDTO page)
         {
             var query = _context.MenuItems
@@ -9739,7 +9789,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<MenuRecords.MenuItemResponse>>.Success(pagedResponse);
         }
 
-     
         public async Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllMenuItemsAsync(PageDTO page)
         {
             var query = _context.MenuItems.AsNoTracking();
@@ -9765,7 +9814,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<MenuRecords.MenuItemResponse>>.Success(pagedResponse);
         }
 
-    
         public async Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllAvailableMenuItemsAsync(PageDTO page)
         {
             var query = _context.MenuItems
@@ -9794,10 +9842,43 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<MenuRecords.MenuItemResponse>>.Success(pagedResponse);
         }
 
-      
         public async Task<Result<MenuRecords.MenuItemResponse>> GetItemByIdAsync(int menuItemId)
         {
             return await GetMenuItemAsync(menuItemId);
+        }
+
+         public async Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> SearchMenuItemsAsync(string queryText, PageDTO page)
+        {
+            var query = _context.MenuItems.AsNoTracking();
+
+            if (!string.IsNullOrWhiteSpace(queryText))
+            {
+                query = query.Where(m =>
+                    m.NameAr.Contains(queryText) ||
+                    m.NameEn.Contains(queryText) ||
+                    m.Description.Contains(queryText));
+            }
+
+            var totalRecords = await query.CountAsync();
+
+            var items = await query
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(m => new MenuRecords.MenuItemResponse
+                (
+                    m.MenuItemId,
+                    m.CategoryId,
+                    m.NameAr,
+                    m.NameEn,
+                    m.Description,
+                    m.Price,
+                    m.Emoji,
+                    m.IsAvailable
+                ))
+                .ToListAsync();
+
+            var pagedResponse = new PagedResponse<MenuRecords.MenuItemResponse>(items, totalRecords, page.PageNumber, page.PageSize);
+            return Result<PagedResponse<MenuRecords.MenuItemResponse>>.Success(pagedResponse);
         }
     }
 }
@@ -9812,8 +9893,11 @@ using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using static OrderingSystem.Application.DTOs.OrderRecords;
 
 namespace OrderingSystem.Infrastructure.Queries
 {
@@ -9848,8 +9932,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     o.CreatedAt,
                     o.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
                         oi.MenuItemId,
-                        oi.MenuItem != null ? oi.MenuItem.NameEn : "Deleted Item", // Safe null check
-                        oi.MenuItem != null ? oi.MenuItem.NameAr : "عنصر محذوف",  // Safe null check
+                        oi.MenuItem != null ? oi.MenuItem.NameEn : "Deleted Item",
+                        oi.MenuItem != null ? oi.MenuItem.NameAr : "عنصر محذوف",
                         oi.Quantity,
                         oi.UnitPrice,
                         oi.Notes
@@ -9860,6 +9944,7 @@ namespace OrderingSystem.Infrastructure.Queries
             var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
             return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
         }
+
         public async Task<Result<List<OrderRecords.OrderItemResponse>>> GetTopThreeItemsTodayAsync()
         {
             var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
@@ -9898,6 +9983,7 @@ namespace OrderingSystem.Infrastructure.Queries
 
             return Result<List<OrderRecords.OrderItemResponse>>.Success(itemsList);
         }
+
         public async Task<Result<int>> GetCountOfPendingOrder()
         {
             try
@@ -9910,15 +9996,14 @@ namespace OrderingSystem.Infrastructure.Queries
             }
             catch (Exception ex)
             {
-
                 return Result<int>.Failure($"Error when fetching pending order count: {ex.Message}");
             }
         }
+
         public async Task<Result<int>> GetCountOfOrders()
         {
             try
             {
-
                 var count = await _context.Orders.CountAsync();
 
                 return Result<int>.Success(count);
@@ -9939,7 +10024,6 @@ namespace OrderingSystem.Infrastructure.Queries
 
             var totalRecords = await query.CountAsync();
 
-            // Use the exact same mapping logic found in GetPendingOrdersAsync
             var items = await query
                 .OrderByDescending(o => o.CreatedAt)
                 .Skip((page.PageNumber - 1) * page.PageSize)
@@ -9964,6 +10048,47 @@ namespace OrderingSystem.Infrastructure.Queries
             var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
             return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
         }
+
+        // ---------- الدالة المعدلة لسجل الفواتير ----------
+        public async Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(
+            DateTime startDate,
+            DateTime endDate,
+            PageDTO page)
+        {
+            var query = _context.Orders
+                .AsNoTracking()
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.MenuItem)
+                .Include(o => o.Session)
+                    .ThenInclude(s => s.Table)
+                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate);
+
+            var totalRecords = await query.CountAsync();
+
+            var items = await query
+                .OrderByDescending(o => o.CreatedAt)
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .Select(o => new HistoricalBillResponse(
+                    $"BILL-{o.OrderId}",
+                    o.Session != null && o.Session.Table != null ? o.Session.Table.TableNumber : 0,
+                    o.OrderStatus.ToString().ToLower(),
+                    o.CreatedAt,
+                    o.TotalAmount,
+                    o.OrderItems.Select(i => new OrderingSystem.Application.DTOs.OrderRecords.BillItemResponse(
+                        i.MenuItemId,
+                        i.MenuItem != null ? i.MenuItem.NameAr : "عنصر محذوف",
+                        i.MenuItem != null ? i.MenuItem.NameEn : "Deleted Item",
+                        i.Quantity,
+                        i.UnitPrice,
+                        i.Quantity * i.UnitPrice
+                    )).ToList()
+                ))
+                .ToListAsync();
+
+            var pagedResponse = new PagedResponse<HistoricalBillResponse>(items, totalRecords, page.PageNumber, page.PageSize);
+            return Result<PagedResponse<HistoricalBillResponse>>.Success(pagedResponse);
+        }
     }
 }
 
@@ -9977,6 +10102,7 @@ using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
+using System;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -10034,7 +10160,7 @@ namespace OrderingSystem.Infrastructure.Queries
             return table;
         }
 
-          public async Task<PagedResponse<TableResponse>> GetAllTablesByFloorAsync(PageDTO page, int floorNumber)
+        public async Task<PagedResponse<TableResponse>> GetAllTablesByFloorAsync(PageDTO page, int floorNumber)
         {
             var query = _context.Tables
                 .AsNoTracking()
@@ -10050,7 +10176,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
 
-        
         public async Task<PagedResponse<TableResponse>> GetAllTablesAsync(PageDTO page)
         {
             var query = _context.Tables.AsNoTracking();
@@ -10065,7 +10190,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
 
-    
         public async Task<PagedResponse<TableResponse>> GetAllTablesByStatusAsync(PageDTO page, enTableStatus tableStatus)
         {
             var query = _context.Tables
@@ -10083,7 +10207,6 @@ namespace OrderingSystem.Infrastructure.Queries
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
 
-    
         public async Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page)
         {
             var query = _context.Tables
@@ -10104,6 +10227,10 @@ namespace OrderingSystem.Infrastructure.Queries
                         t.Sessions
                             .Where(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null)
                             .Select(s => s.TableSessionId)
+                            .FirstOrDefault(),
+                        t.Sessions
+                            .Where(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null)
+                            .Select(s => (DateTime?)s.CreatedAt)
                             .FirstOrDefault()
                     ))
                     .ToListAsync();
@@ -10131,17 +10258,21 @@ namespace OrderingSystem.Infrastructure.Queries
                         t.Sessions
                             .Where(s => s.ClosedAt == null)
                             .Select(s => s.TableSessionId)
+                            .FirstOrDefault(),
+                        t.Sessions
+                            .Where(s => s.ClosedAt == null)
+                            .Select(s => (DateTime?)s.CreatedAt)
                             .FirstOrDefault()
                     ))
                     .ToListAsync();
 
             return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
+
         public async Task<Result<int>> GetCountOfOccupiedTables()
         {
             try
             {
-
                 var count = await _context.Tables
                     .Where(t => t.Status == enTableStatus.Occupied)
                     .CountAsync();
@@ -10154,14 +10285,13 @@ namespace OrderingSystem.Infrastructure.Queries
             }
         }
 
-
         public async Task<Result<int>> GetCountTable()
         {
             try
             {
                 var count = await _context.Tables
                     .AsNoTracking()
-                    .Where(t => !t.IsDeleted) // في حال أردت استثناء الطاولات المحذوفة
+                    .Where(t => !t.IsDeleted)
                     .CountAsync();
 
                 return Result<int>.Success(count);
@@ -10173,7 +10303,6 @@ namespace OrderingSystem.Infrastructure.Queries
         }
     }
 }
-
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Queries\TableSessionQuery.cs

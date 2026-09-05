@@ -34,13 +34,15 @@ namespace OrderingSystem.Infrastructure.Queries
             var table = await _context.Tables
                 .AsNoTracking()
                 .Where(t => t.TableId == tableId)
-                .Select(t => new TableResponse
-                (
+                .Select(t => new TableResponse(
                     t.TableId,
                     t.TableNumber,
                     t.FloorNumber,
                     t.QrCode,
-                    t.Status
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
                 ))
                 .FirstOrDefaultAsync();
             return table;
@@ -51,13 +53,15 @@ namespace OrderingSystem.Infrastructure.Queries
             var table = await _context.Tables
                 .AsNoTracking()
                 .Where(t => t.TableNumber == tableNumber && t.FloorNumber == floorNumber)
-                .Select(t => new TableResponse
-                (
+                .Select(t => new TableResponse(
                     t.TableId,
                     t.TableNumber,
                     t.FloorNumber,
                     t.QrCode,
-                    t.Status
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
                 ))
                 .FirstOrDefaultAsync();
             return table;
@@ -73,7 +77,16 @@ namespace OrderingSystem.Infrastructure.Queries
             var tables = await query
                 .Skip((page.PageNumber - 1) * page.PageSize)
                 .Take(page.PageSize)
-                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
+                .Select(t => new TableResponse(
+                    t.TableId,
+                    t.TableNumber,
+                    t.FloorNumber,
+                    t.QrCode,
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
+                ))
                 .ToListAsync();
 
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
@@ -87,7 +100,16 @@ namespace OrderingSystem.Infrastructure.Queries
             var tables = await query
                 .Skip((page.PageNumber - 1) * page.PageSize)
                 .Take(page.PageSize)
-                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
+                .Select(t => new TableResponse(
+                    t.TableId,
+                    t.TableNumber,
+                    t.FloorNumber,
+                    t.QrCode,
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
+                ))
                 .ToListAsync();
 
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
@@ -104,7 +126,16 @@ namespace OrderingSystem.Infrastructure.Queries
             var tables = await query
                 .Skip((page.PageNumber - 1) * page.PageSize)
                 .Take(page.PageSize)
-                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
+                .Select(t => new TableResponse(
+                    t.TableId,
+                    t.TableNumber,
+                    t.FloorNumber,
+                    t.QrCode,
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
+                ))
                 .ToListAsync();
 
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
