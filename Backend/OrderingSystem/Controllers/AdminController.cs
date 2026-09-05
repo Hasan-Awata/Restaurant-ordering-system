@@ -1,12 +1,12 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
 using OrderingSystem.Application.DTOs.Paged;
-using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.WebApi.Controllers.Base;
+using System;
+using System.Threading.Tasks;
 
 namespace OrderingSystem.Controllers
 {
@@ -23,13 +23,14 @@ namespace OrderingSystem.Controllers
             _tableQuery = tableQuery;
         }
 
-         [Authorize(Roles = "Admin,Cashier")]
-          [HttpGet("top-three-today")]
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpGet("top-three-today")]
         public async Task<IActionResult> GetTopThreeItemsToday()
         {
             var result = await _orderQuery.GetTopThreeItemsTodayAsync();
             return HandleResult(result);
         }
+
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("pending-count-orders")]
         public async Task<IActionResult> GetCountOfPendingOrders()
@@ -38,20 +39,13 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-       [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-orders")]
         public async Task<IActionResult> GetCountOfOrders()
         {
             var result = await _orderQuery.GetCountOfOrders();
             return HandleResult(result);
         }
-        //  [Authorize(Roles = "Admin,Cashier")]
-        //[HttpGet("total-count-table")]
-        //public async Task<IActionResult> GetCountOfOccupiedTables()
-        //{
-        //    var result = await _tableQuery.GetCountOfOccupiedTables();
-        //    return HandleResult(result);
-        //}
 
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-table")]
@@ -62,15 +56,15 @@ namespace OrderingSystem.Controllers
         }
 
         [Authorize(Roles = "Admin")]
-        [HttpGet("historical-orders")]
-        public async Task<IActionResult> GetHistoricalOrders(
+        [HttpGet("historical-bills")] 
+        public async Task<IActionResult> GetHistoricalBills(
             [FromQuery] DateTime startDate,
             [FromQuery] DateTime endDate,
             [FromQuery] PageDTO page)
         {
-            var result = await _orderQuery.GetOrdersByDateRangeAsync(startDate, endDate, page);
+        
+            var result = await _orderQuery.GetHistoricalBillsAsync(startDate, endDate, page);
             return HandleResult(result);
         }
-
     }
 }
