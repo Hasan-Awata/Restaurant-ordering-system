@@ -20,6 +20,7 @@ namespace OrderingSystem.WebApi.Controllers
             _taxCommandService = taxCommandService;
             _taxQuery = taxQuery;
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpPost]
         public async Task<IActionResult> AddTax([FromBody] TaxRecords.AddTaxRequest request)
@@ -27,6 +28,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _taxCommandService.AddTaxAsync(request);
             return HandleCreatedResult(result, nameof(GetTaxById), new { id = result.Value?.TaxId });
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpPut]
         public async Task<IActionResult> UpdateTax([FromBody] TaxRecords.UpdateTaxRequest request)
@@ -35,6 +37,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteTax(int id)
         {
@@ -42,6 +45,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetTaxById(int id)
         {
@@ -49,6 +53,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet]
         [AllowAnonymous] // Or change to [Authorize(Roles = "Admin,Cashier")] based on your needs
         public async Task<IActionResult> GetAllTaxes([FromQuery] PageDTO page)

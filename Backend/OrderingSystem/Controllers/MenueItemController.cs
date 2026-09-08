@@ -23,7 +23,7 @@ namespace OrderingSystem.WebApi.Controllers
             _menuItemQueryService = menuItemQueryService;
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> AddMenuItem([FromBody] MenuRecords.AddMenuItemRequest request)
         {
@@ -36,7 +36,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPut]
         public async Task<IActionResult> UpdateMenuItem([FromBody] MenuRecords.UpdateMenuItemRequest request)
         {
@@ -44,13 +44,14 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete]
         public async Task<IActionResult> DeleteMenuItem([FromBody] MenuRecords.DeleteMenuItemRequest request)
         {
             var result = await _menuItemCommandService.DeleteMenuItemAsync(request);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet("{id}")]
         public async Task<IActionResult> GetItemById(int id)
@@ -58,6 +59,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetItemByIdAsync(id);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetMenuItem(int id)
@@ -65,6 +67,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetMenuItemAsync(id);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet]
         public async Task<IActionResult> GetAllMenuItems([FromQuery] PageDTO page)
@@ -72,6 +75,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetAllMenuItemsAsync(page);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet("category/{categoryId}")]
         public async Task<IActionResult> GetAllMenuItemsByCategory(int categoryId, [FromQuery] PageDTO page)
@@ -79,6 +83,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetAllMenuItemsByCategoryAsync(categoryId, page);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableMenuItems([FromQuery] PageDTO page)
@@ -87,7 +92,8 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-       
+        [Authorize(Roles = "Admin,Cashier")]
+
         [HttpGet("search")]
         public async Task<IActionResult> SearchMenuItems([FromQuery] string query, [FromQuery] PageDTO page)
         {

@@ -21,6 +21,7 @@ namespace OrderingSystem.WebApi.Controllers
             _orderQuery = orderQuery;
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
@@ -49,6 +50,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}/customer-cancel")]
         public async Task<IActionResult> CustomerCancelOrder(int id)
         {

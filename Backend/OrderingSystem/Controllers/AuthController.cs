@@ -18,6 +18,7 @@ namespace OrderingSystem.WebApi.Controllers
             _authCommandService = authCommandService;
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
@@ -33,15 +34,16 @@ namespace OrderingSystem.WebApi.Controllers
 
             return HandleResult(result);
         }
-
-        [HttpPost("refresh-token")]
+        
+      [HttpPost("refresh-token")]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
         {
             var result = await _authCommandService.RefreshTokenAsync(request);
             return HandleResult(result);
         }
 
-        [Authorize]
+        [Authorize(Roles = "Admin,Cashier")]
+
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
         {

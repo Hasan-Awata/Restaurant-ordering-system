@@ -55,7 +55,7 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("historical-bills")] 
         public async Task<IActionResult> GetHistoricalBills(
             [FromQuery] DateTime startDate,
