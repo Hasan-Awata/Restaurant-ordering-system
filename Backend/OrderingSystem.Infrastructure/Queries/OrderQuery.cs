@@ -116,13 +116,19 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             try
             {
-                var count = await _context.Orders.CountAsync();
+                // تحديد تاريخ اليوم الحالي
+                var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
+
+                // حساب الطلبات التي تم إنشاؤها اليوم فقط
+                var count = await _context.Orders
+                    .Where(o => o.CreatedAt.Date == today)
+                    .CountAsync();
 
                 return Result<int>.Success(count);
             }
             catch (Exception ex)
             {
-                return Result<int>.Failure($"Error when fetching total order count: {ex.Message}");
+                return Result<int>.Failure($"Error when fetching today's order count: {ex.Message}");
             }
         }
 
