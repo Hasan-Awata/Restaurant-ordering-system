@@ -84,15 +84,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        // ── CASHIER PATH: Approve the bill ──────────────────────────────────────
-        [Authorize(Roles = "Admin,Cashier")]
-        [HttpPost("approve-bill")]
-        public async Task<IActionResult> ApproveBill([FromBody] ApproveBillRequest request)
-        {
-            var result = await _sessionCommandService.ApproveBillAsync(request.tableSessionId);
-            return HandleResult(result);
-        }
-
         // ── CASHIER PATH: Close session after payment ───────────────────────────
         [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("end")]

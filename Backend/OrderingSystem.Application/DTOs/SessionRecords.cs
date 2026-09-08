@@ -13,7 +13,6 @@ namespace OrderingSystem.Application.DTOs
     public record ActivateTableSessionRequest([Required] Guid tableSessionId); 
     public record DeactivateSessionByAdminRequest([Required] int tableId);
     public record RequestBillRequest([Required] Guid tableSessionId);
-    public record ApproveBillRequest([Required] Guid tableSessionId);
     public record AppliedTaxResponse(string NameEn, string NameAr, decimal Amount);
 
 

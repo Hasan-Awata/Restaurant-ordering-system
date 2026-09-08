@@ -68,13 +68,6 @@ namespace OrderingSystem.Infrastructure.Notifications
                 .ReceiveBillRequestNotification(tableSessionId, tableNumber, $"Table {tableNumber} is requesting the bill.");
         }
 
-        public async Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId)
-        {
-            // Broadcast to the entire table session group so all devices at the table know the bill is ready
-            await _hubContext.Clients.Group(tableSessionId.ToString())
-                .ReceiveBillApprovalNotification(tableSessionId, "Your bill has been prepared and approved by the cashier.");
-        }
-
         public async Task NotifyMenuUpdatedAsync()
         {
             // Broadcasting to All ensures every active customer app refreshes the menu

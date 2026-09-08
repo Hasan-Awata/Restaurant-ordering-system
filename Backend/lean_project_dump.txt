@@ -1171,6 +1171,22 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("dismiss")]
+        public async Task<IActionResult> DismissTableSession([FromBody] ActivateTableSessionRequest request)
+        {
+            var result = await _sessionCommandService.DismissTableSessionAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("dismiss-bill")]
+        public async Task<IActionResult> DismissBill([FromBody] ActivateTableSessionRequest request)
+        {
+            var result = await _sessionCommandService.DismissBillAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
         // 2. READ ENDPOINT (Query Path)
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("active/{tableId}")]
@@ -1186,7 +1202,6 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpGet("{tableSessionId}/status")]
         public async Task<IActionResult> GetSessionPollingStatus(Guid tableSessionId)
         {
-            // التحقق من وجود DeviceSessionId صالح في الـ Cookies
             if (!CurrentDeviceSessionId.HasValue)
             {
                 return Unauthorized(new { error = "Invalid or missing device session." });
@@ -1590,16 +1605,18 @@ namespace OrderingSystem.Application.DTOs
         public record OrderResponse(int OrderId, int TableNumber, decimal TotalAmount, enOrderStatus OrderStatus, DateTime CreatedAt, List<OrderItemResponse> Items);
         public record OrderItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice, string Notes);
 
-        
+
         public record HistoricalBillResponse(
-        string OrderId,
-        int TableNumber,
-        string TableSessionId,
-        string Status,
-        DateTime CreatedAt,
-        decimal TotalAmount,
-        List<BillItemResponse> Items
-         );
+            string OrderId,
+            int TableNumber,
+            string TableSessionId,
+            string Status,
+            DateTime CreatedAt,
+            decimal TotalSubTotal,
+            decimal GrandTotal,
+            List<BillItemResponse> Items,
+            List<AppliedTaxResponse> AppliedTaxes 
+        );
 
         public record BillItemResponse(
             int MenuItemId,
@@ -1978,6 +1995,9 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyCashiersOfBillRequestAsync(Guid tableSessionId, int tableNumber);
         public Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId);
         public Task NotifyMenuUpdatedAsync();
+        public Task NotifyCustomerOfActivationDismissedAsync(Guid tableSessionId);
+        public Task NotifyCustomerOfBillRejectedAsync(Guid tableSessionId);
+        public Task NotifyCustomerOfOrderRejectedAsync(Guid deviceSessionId, int orderId);
     }
 }
 
@@ -2003,6 +2023,9 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveBillRequestNotification(Guid tableSessionId, int tableNumber, string message);
         public Task ReceiveBillApprovalNotification(Guid tableSessionId, string message);
         public Task ReceiveMenuUpdated(string message);
+        public Task ReceiveActivationDismissed(string message);
+        public Task ReceiveBillRejected(string message);
+        public Task ReceiveOrderRejected(int orderId, string message);
     }
 }
 
@@ -2143,6 +2166,8 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
         public Task<Result<SessionResponse>> EndTableSessionAsync(Guid tableSessionId);
         public Task<Result> RequestBillAsync(Guid tableSessionId, Guid deviceSessionId);
         public Task<Result> ApproveBillAsync(Guid tableSessionId);
+        public Task<Result> DismissTableSessionAsync(Guid tableSessionId);
+        public Task<Result> DismissBillAsync(Guid tableSessionId);
     }
 }
 
@@ -3388,6 +3413,50 @@ namespace OrderingSystem.Application.Services
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
         }
+
+        public async Task<Result> DismissTableSessionAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetSessionByIdAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("Table session not found.", enErrorType.NotFound);
+
+            if (session.Status != enSessionStatus.PendingActivation)
+                return Result.Failure("Session is not pending activation.", enErrorType.Conflict);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table != null)
+            {
+                table.Status = enTableStatus.Available;
+                await _tableRepository.UpdateTableAsync(table);
+            }
+
+            await _notifier.NotifyCustomerOfActivationDismissedAsync(tableSessionId);
+
+            await _tableSessionRepository.DeleteSessionAsync(session);
+
+            return Result.Success();
+        }
+
+        public async Task<Result> DismissBillAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table == null)
+                return Result.Failure("Table not found.", enErrorType.NotFound);
+
+            if (table.Status == enTableStatus.Billing)
+            {
+                table.Status = enTableStatus.Occupied;
+                await _tableRepository.UpdateTableAsync(table);
+            }
+
+            await _notifier.NotifyCustomerOfBillRejectedAsync(tableSessionId);
+
+            return Result.Success();
+        }
     }
 }
 
@@ -4322,6 +4391,23 @@ namespace OrderingSystem.Infrastructure.Notifications
         {
             // Broadcasting to All ensures every active customer app refreshes the menu
             await _hubContext.Clients.All.ReceiveMenuUpdated("The menu has been updated.");
+        }
+        public async Task NotifyCustomerOfActivationDismissedAsync(Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveActivationDismissed("Table activation was dismissed.");
+        }
+
+        public async Task NotifyCustomerOfBillRejectedAsync(Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveBillRejected("Your bill request was rejected.");
+        }
+
+        public async Task NotifyCustomerOfOrderRejectedAsync(Guid deviceSessionId, int orderId)
+        {
+            await _hubContext.Clients.Group(deviceSessionId.ToString())
+                .ReceiveOrderRejected(orderId, "Your order request was rejected.");
         }
     }
 }
@@ -9997,13 +10083,19 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             try
             {
-                var count = await _context.Orders.CountAsync();
+                // تحديد تاريخ اليوم الحالي
+                var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
+
+                // حساب الطلبات التي تم إنشاؤها اليوم فقط
+                var count = await _context.Orders
+                    .Where(o => o.CreatedAt.Date == today)
+                    .CountAsync();
 
                 return Result<int>.Success(count);
             }
             catch (Exception ex)
             {
-                return Result<int>.Failure($"Error when fetching total order count: {ex.Message}");
+                return Result<int>.Failure($"Error when fetching today's order count: {ex.Message}");
             }
         }
 
@@ -10047,10 +10139,14 @@ namespace OrderingSystem.Infrastructure.Queries
             DateTime endDate,
             PageDTO page)
         {
-            // 1. تحديد الجلسات (Sessions) ضمن الفترة الزمنية المحددة (تجميع حسب TableSessionId)
+            var activeTaxes = await _context.Taxes
+                .AsNoTracking()
+                .Where(t => t.IsActive && !t.IsDeleted)
+                .ToListAsync();
+
             var sessionQuery = _context.Orders
                 .AsNoTracking()
-                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate && o.TableSessionId != null)
+                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate) 
                 .GroupBy(o => o.TableSessionId)
                 .Select(g => new
                 {
@@ -10058,10 +10154,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     LastOrderDate = g.Max(o => o.CreatedAt)
                 });
 
-            // 2. حساب العدد الإجمالي للجلسات
             var totalRecords = await sessionQuery.CountAsync();
 
-            // 3. جلب TableSessionIds للصفحة الحالية
             var pagedSessions = await sessionQuery
                 .OrderByDescending(x => x.LastOrderDate)
                 .Skip((page.PageNumber - 1) * page.PageSize)
@@ -10070,7 +10164,6 @@ namespace OrderingSystem.Infrastructure.Queries
 
             var sessionIds = pagedSessions.Select(s => s.SessionId).ToList();
 
-            // 4. جلب جميع الطلبات التي تخص جلسات هذه الصفحة
             var ordersForSessions = await _context.Orders
                 .AsNoTracking()
                 .Include(o => o.OrderItems)
@@ -10080,7 +10173,6 @@ namespace OrderingSystem.Infrastructure.Queries
                 .Where(o => sessionIds.Contains(o.TableSessionId))
                 .ToListAsync();
 
-            // 5. تجميع المعاملات في الذاكرة لتشكيل الفواتير المجمعة
             var items = ordersForSessions
                 .GroupBy(o => o.TableSessionId)
                 .Select(g =>
@@ -10097,7 +10189,7 @@ namespace OrderingSystem.Infrastructure.Queries
 
                             return new OrderRecords.BillItemResponse(
                                 firstItem.MenuItemId,
-                                firstItem.MenuItem != null ? firstItem.MenuItem.NameAr : "عنصر محذوف",
+                                firstItem.MenuItem != null ? firstItem.MenuItem.NameAr : "Deleted Item",
                                 firstItem.MenuItem != null ? firstItem.MenuItem.NameEn : "Deleted Item",
                                 totalQuantity,
                                 firstItem.UnitPrice,
@@ -10105,14 +10197,49 @@ namespace OrderingSystem.Infrastructure.Queries
                             );
                         }).ToList();
 
+                    decimal subTotal = g.Sum(o => o.TotalAmount);
+                    var appliedTaxes = new List<AppliedTaxResponse>();
+                    decimal totalTaxAmount = 0;
+
+                    var uniqueGuests = g.Select(o => o.DeviceSessionId).Distinct().Count();
+                    var totalItemsCount = groupedItems.Sum(i => i.Quantity);
+
+                    foreach (var tax in activeTaxes)
+                    {
+                        decimal taxAmount = 0;
+
+                        if (tax.TaxType == enTaxType.Percentage)
+                        {
+                            if (tax.TaxScope == enTaxScope.PerBill)
+                                taxAmount = subTotal * (tax.Amount / 100m);
+                        }
+                        else if (tax.TaxType == enTaxType.FlatRate)
+                        {
+                            if (tax.TaxScope == enTaxScope.PerBill)
+                                taxAmount = tax.Amount;
+                            else if (tax.TaxScope == enTaxScope.PerGuest)
+                                taxAmount = tax.Amount * (uniqueGuests > 0 ? uniqueGuests : 1);
+                            else if (tax.TaxScope == enTaxScope.PerItem)
+                                taxAmount = tax.Amount * totalItemsCount;
+                        }
+
+                        if (taxAmount > 0)
+                        {
+                            appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, Math.Round(taxAmount, 2)));
+                            totalTaxAmount += taxAmount;
+                        }
+                    }
+
                     return new HistoricalBillResponse(
                         $"BILL-{firstOrder.OrderId}",
                         firstOrder.Session?.Table?.TableNumber ?? 0,
                         g.Key.ToString(),
                         lastOrder.OrderStatus.ToString().ToLower(),
                         lastOrder.CreatedAt,
-                        g.Sum(o => o.TotalAmount),
-                        groupedItems
+                        subTotal,
+                        subTotal + totalTaxAmount,
+                        groupedItems,
+                        appliedTaxes
                     );
                 })
                 .OrderByDescending(x => x.CreatedAt)
@@ -10410,91 +10537,95 @@ namespace OrderingSystem.Infrastructure.Queries
             var session = await _context.TableSessions
                 .AsNoTracking()
                 .Include(s => s.Devices)
-                .Include(s => s.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled))
+                .Include(s => s.Orders)
                     .ThenInclude(o => o.OrderItems)
                         .ThenInclude(oi => oi.MenuItem)
                 .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId);
 
-            if (session == null) return null;
+            if (session == null)
+                return null;
+
+            var activeTaxes = await _context.Taxes
+                .AsNoTracking()
+                .Where(t => t.IsActive && !t.IsDeleted)
+                .ToListAsync();
+
+            var validOrders = session.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled).ToList();
 
             var guestBills = new List<GuestBillResponse>();
             decimal totalSubTotal = 0;
-            int totalItemsQuantity = 0; // Track this for PerItem taxes
 
             foreach (var device in session.Devices)
             {
-                var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
-                if (!deviceOrders.Any()) continue;
+                var deviceOrders = validOrders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
 
-                var groupedItems = deviceOrders
+                var billItems = deviceOrders
                     .SelectMany(o => o.OrderItems)
                     .GroupBy(oi => oi.MenuItemId)
-                    .Select(g => new BillItemResponse(
-                        g.Key,
-                        g.First().MenuItem?.NameEn ?? "Deleted Item",
-                        g.First().MenuItem?.NameAr ?? "عنصر محذوف",
-                        g.Sum(oi => oi.Quantity),
-                        g.First().UnitPrice,
-                        g.Sum(oi => oi.Quantity * oi.UnitPrice)
-                    )).ToList();
+                    .Select(g =>
+                    {
+                        var first = g.First();
+                        var totalQty = g.Sum(oi => oi.Quantity);
+                        return new BillItemResponse(
+                            first.MenuItemId,
+                            first.MenuItem?.NameEn ?? "Deleted Item",
+                            first.MenuItem?.NameAr ?? "Deleted Item",
+                            totalQty,
+                            first.UnitPrice,
+                            totalQty * first.UnitPrice
+                        );
+                    })
+                    .ToList();
 
-                decimal subTotal = groupedItems.Sum(i => i.TotalPrice);
-                totalSubTotal += subTotal;
-                totalItemsQuantity += groupedItems.Sum(i => i.Quantity);
+                decimal guestSubTotal = billItems.Sum(i => i.TotalPrice);
+                totalSubTotal += guestSubTotal;
 
-                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, groupedItems, subTotal));
+                guestBills.Add(new GuestBillResponse(
+                    device.DeviceSessionId,
+                    device.Role,
+                    billItems,
+                    guestSubTotal
+                ));
             }
-
-            // 1. Fetch active taxes dynamically
-            var activeTaxes = await _context.Taxes
-                .AsNoTracking()
-                .Where(t => t.IsActive)
-                .ToListAsync();
 
             var appliedTaxes = new List<AppliedTaxResponse>();
             decimal totalTaxAmount = 0;
 
-            // 2. Process each tax based on its Type and Scope
+            var uniqueGuestsCount = session.Devices.Count;
+            var totalItemsCount = validOrders.SelectMany(o => o.OrderItems).Sum(oi => oi.Quantity);
+
             foreach (var tax in activeTaxes)
             {
-                decimal calculatedAmount = 0;
+                decimal taxAmount = 0;
 
                 if (tax.TaxType == enTaxType.Percentage)
                 {
-                    // Percentages apply to the subtotal
-                    calculatedAmount = totalSubTotal * (tax.Amount / 100m);
+                    if (tax.TaxScope == enTaxScope.PerBill)
+                        taxAmount = totalSubTotal * (tax.Amount / 100m);
                 }
                 else if (tax.TaxType == enTaxType.FlatRate)
                 {
-                    switch (tax.TaxScope)
-                    {
-                        case enTaxScope.PerBill:
-                            calculatedAmount = tax.Amount;
-                            break;
-                        case enTaxScope.PerGuest:
-                            calculatedAmount = tax.Amount * session.Devices.Count;
-                            break;
-                        case enTaxScope.PerItem:
-                            calculatedAmount = tax.Amount * totalItemsQuantity;
-                            break;
-                    }
+                    if (tax.TaxScope == enTaxScope.PerBill)
+                        taxAmount = tax.Amount;
+                    else if (tax.TaxScope == enTaxScope.PerGuest)
+                        taxAmount = tax.Amount * uniqueGuestsCount;
+                    else if (tax.TaxScope == enTaxScope.PerItem)
+                        taxAmount = tax.Amount * totalItemsCount;
                 }
 
-                if (calculatedAmount > 0)
+                if (taxAmount > 0)
                 {
-                    appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, calculatedAmount));
-                    totalTaxAmount += calculatedAmount;
+                    appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, Math.Round(taxAmount, 2)));
+                    totalTaxAmount += taxAmount;
                 }
             }
 
-            decimal grandTotal = totalSubTotal + totalTaxAmount;
-
             return new BillSummaryResponse(
-                session.TableSessionId,
+                tableSessionId,
                 guestBills,
                 totalSubTotal,
-                appliedTaxes, 
-                grandTotal
+                appliedTaxes,
+                totalSubTotal + totalTaxAmount
             );
         }
         public async Task<SessionPollingResponse?> GetSessionPollingStatusAsync(Guid tableSessionId, Guid deviceSessionId)

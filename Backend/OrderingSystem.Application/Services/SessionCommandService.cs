@@ -42,7 +42,7 @@ namespace OrderingSystem.Application.Services
                 return Result<SessionResponse>.Failure("Table was not found.", enErrorType.NotFound);
             }
 
-            var activeSession = table.Sessions.FirstOrDefault();
+            var activeSession = table.Sessions.FirstOrDefault(s => s.ClosedAt == null && s.Status != enSessionStatus.Closed);
 
             if (activeSession != null)
             {
@@ -55,6 +55,9 @@ namespace OrderingSystem.Application.Services
             }
 
             table.Status = enTableStatus.Occupied;
+
+            await _tableRepository.UpdateTableAsync(table);
+
             return await ActivateTableSessionAsync(table.TableId, Guid.CreateVersion7());
         }
 
@@ -210,36 +213,16 @@ namespace OrderingSystem.Application.Services
             if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
                 return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
 
-            if(session.Orders.Count == 0)
+            if (session.Orders.Count == 0)
                 return Result.Failure("No orders available for billing.", enErrorType.Validation);
 
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
 
-            // Notify the cashiers
+            // This acts as the single "AcceptPayment" notification to the cashier
             await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
 
             table.Status = enTableStatus.Billing;
             await _tableRepository.UpdateTableAsync(table);
-
-            return Result.Success();
-        }
-
-        public async Task<Result> ApproveBillAsync(Guid tableSessionId)
-        {
-            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
-            if (session == null)
-                return Result.Failure("No active table session was found.", enErrorType.NotFound);
-
-            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
-            if (table == null)
-                return Result.Failure("Table not found.", enErrorType.NotFound);
-
-            // Change table status to Billing
-            table.Status = enTableStatus.Billing;
-            await _tableRepository.UpdateTableAsync(table);
-
-            // Notify the customer
-            await _notifier.NotifyCustomerOfBillApprovalAsync(tableSessionId);
 
             return Result.Success();
         }
@@ -298,7 +281,9 @@ namespace OrderingSystem.Application.Services
 
             await _notifier.NotifyCustomerOfActivationDismissedAsync(tableSessionId);
 
-            await _tableSessionRepository.DeleteSessionAsync(session);
+            session.Status = enSessionStatus.Closed;
+            session.ClosedAt = DateTime.UtcNow;
+            await _tableSessionRepository.UpdateSessionAsync(session);
 
             return Result.Success();
         }
