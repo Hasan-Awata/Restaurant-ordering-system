@@ -161,42 +161,81 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
         }
 
-        // ---------- الدالة المعدلة لسجل الفواتير ----------
         public async Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(
             DateTime startDate,
             DateTime endDate,
             PageDTO page)
         {
-            var query = _context.Orders
+            // 1. تحديد الجلسات (Sessions) ضمن الفترة الزمنية المحددة (تجميع حسب TableSessionId)
+            var sessionQuery = _context.Orders
+                .AsNoTracking()
+                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate && o.TableSessionId != null)
+                .GroupBy(o => o.TableSessionId)
+                .Select(g => new
+                {
+                    SessionId = g.Key,
+                    LastOrderDate = g.Max(o => o.CreatedAt)
+                });
+
+            // 2. حساب العدد الإجمالي للجلسات
+            var totalRecords = await sessionQuery.CountAsync();
+
+            // 3. جلب TableSessionIds للصفحة الحالية
+            var pagedSessions = await sessionQuery
+                .OrderByDescending(x => x.LastOrderDate)
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .ToListAsync();
+
+            var sessionIds = pagedSessions.Select(s => s.SessionId).ToList();
+
+            // 4. جلب جميع الطلبات التي تخص جلسات هذه الصفحة
+            var ordersForSessions = await _context.Orders
                 .AsNoTracking()
                 .Include(o => o.OrderItems)
                     .ThenInclude(oi => oi.MenuItem)
                 .Include(o => o.Session)
                     .ThenInclude(s => s.Table)
-                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate);
-
-            var totalRecords = await query.CountAsync();
-
-            var items = await query
-                .OrderByDescending(o => o.CreatedAt)
-                .Skip((page.PageNumber - 1) * page.PageSize)
-                .Take(page.PageSize)
-                .Select(o => new HistoricalBillResponse(
-                    $"BILL-{o.OrderId}",
-                    o.Session != null && o.Session.Table != null ? o.Session.Table.TableNumber : 0,
-                    o.OrderStatus.ToString().ToLower(),
-                    o.CreatedAt,
-                    o.TotalAmount,
-                    o.OrderItems.Select(i => new OrderingSystem.Application.DTOs.OrderRecords.BillItemResponse(
-                        i.MenuItemId,
-                        i.MenuItem != null ? i.MenuItem.NameAr : "عنصر محذوف",
-                        i.MenuItem != null ? i.MenuItem.NameEn : "Deleted Item",
-                        i.Quantity,
-                        i.UnitPrice,
-                        i.Quantity * i.UnitPrice
-                    )).ToList()
-                ))
+                .Where(o => sessionIds.Contains(o.TableSessionId))
                 .ToListAsync();
+
+            // 5. تجميع المعاملات في الذاكرة لتشكيل الفواتير المجمعة
+            var items = ordersForSessions
+                .GroupBy(o => o.TableSessionId)
+                .Select(g =>
+                {
+                    var firstOrder = g.OrderBy(o => o.CreatedAt).First();
+                    var lastOrder = g.OrderByDescending(o => o.CreatedAt).First();
+
+                    var groupedItems = g.SelectMany(o => o.OrderItems)
+                        .GroupBy(oi => oi.MenuItemId)
+                        .Select(itemGroup =>
+                        {
+                            var firstItem = itemGroup.First();
+                            var totalQuantity = itemGroup.Sum(i => i.Quantity);
+
+                            return new OrderRecords.BillItemResponse(
+                                firstItem.MenuItemId,
+                                firstItem.MenuItem != null ? firstItem.MenuItem.NameAr : "عنصر محذوف",
+                                firstItem.MenuItem != null ? firstItem.MenuItem.NameEn : "Deleted Item",
+                                totalQuantity,
+                                firstItem.UnitPrice,
+                                totalQuantity * firstItem.UnitPrice
+                            );
+                        }).ToList();
+
+                    return new HistoricalBillResponse(
+                        $"BILL-{firstOrder.OrderId}",
+                        firstOrder.Session?.Table?.TableNumber ?? 0,
+                        g.Key.ToString(),
+                        lastOrder.OrderStatus.ToString().ToLower(),
+                        lastOrder.CreatedAt,
+                        g.Sum(o => o.TotalAmount),
+                        groupedItems
+                    );
+                })
+                .OrderByDescending(x => x.CreatedAt)
+                .ToList();
 
             var pagedResponse = new PagedResponse<HistoricalBillResponse>(items, totalRecords, page.PageNumber, page.PageSize);
             return Result<PagedResponse<HistoricalBillResponse>>.Success(pagedResponse);
