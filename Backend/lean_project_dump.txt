@@ -429,7 +429,7 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("historical-bills")] 
         public async Task<IActionResult> GetHistoricalBills(
             [FromQuery] DateTime startDate,
@@ -466,6 +466,7 @@ namespace OrderingSystem.WebApi.Controllers
             _authCommandService = authCommandService;
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
@@ -481,15 +482,16 @@ namespace OrderingSystem.WebApi.Controllers
 
             return HandleResult(result);
         }
-
-        [HttpPost("refresh-token")]
+        
+      [HttpPost("refresh-token")]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
         {
             var result = await _authCommandService.RefreshTokenAsync(request);
             return HandleResult(result);
         }
 
-        [Authorize]
+        [Authorize(Roles = "Admin,Cashier")]
+
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
         {
@@ -671,7 +673,7 @@ namespace OrderingSystem.WebApi.Controllers
             _categoryQueryService = categoryQueryService;
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> AddCategory([FromBody] CategoriesRecords.AddCategoryRequest request)
         {
@@ -684,7 +686,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPut]
         public async Task<IActionResult> UpdateCategory([FromBody] CategoriesRecords.UpdateCategoryRequest request)
         {
@@ -692,21 +694,21 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete]
         public async Task<IActionResult> DeleteCategory([FromBody] CategoriesRecords.DeleteCategoryRequest request)
         {
             var result = await _categoryCommandService.DeleteCategoryAsync(request);
             return HandleResult(result);
         }
-
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetCategoryById(int id)
         {
             var result = await _categoryQueryService.GetCategoryByIdAsync(id);
             return HandleResult(result);
         }
-
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetCategory(int id)
         {
@@ -714,6 +716,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet]
         public async Task<IActionResult> GetAllCategories([FromQuery] PageDTO page)
         {
@@ -721,6 +724,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableCategories([FromQuery] PageDTO page)
         {
@@ -758,7 +762,7 @@ namespace OrderingSystem.WebApi.Controllers
             _menuItemQueryService = menuItemQueryService;
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> AddMenuItem([FromBody] MenuRecords.AddMenuItemRequest request)
         {
@@ -771,7 +775,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPut]
         public async Task<IActionResult> UpdateMenuItem([FromBody] MenuRecords.UpdateMenuItemRequest request)
         {
@@ -779,13 +783,14 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete]
         public async Task<IActionResult> DeleteMenuItem([FromBody] MenuRecords.DeleteMenuItemRequest request)
         {
             var result = await _menuItemCommandService.DeleteMenuItemAsync(request);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet("{id}")]
         public async Task<IActionResult> GetItemById(int id)
@@ -793,6 +798,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetItemByIdAsync(id);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetMenuItem(int id)
@@ -800,6 +806,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetMenuItemAsync(id);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet]
         public async Task<IActionResult> GetAllMenuItems([FromQuery] PageDTO page)
@@ -807,6 +814,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetAllMenuItemsAsync(page);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet("category/{categoryId}")]
         public async Task<IActionResult> GetAllMenuItemsByCategory(int categoryId, [FromQuery] PageDTO page)
@@ -814,6 +822,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetAllMenuItemsByCategoryAsync(categoryId, page);
             return HandleResult(result);
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableMenuItems([FromQuery] PageDTO page)
@@ -822,7 +831,8 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-       
+        [Authorize(Roles = "Admin,Cashier")]
+
         [HttpGet("search")]
         public async Task<IActionResult> SearchMenuItems([FromQuery] string query, [FromQuery] PageDTO page)
         {
@@ -858,6 +868,7 @@ namespace OrderingSystem.WebApi.Controllers
             _orderQuery = orderQuery;
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
@@ -886,6 +897,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}/customer-cancel")]
         public async Task<IActionResult> CustomerCancelOrder(int id)
         {
@@ -922,7 +934,8 @@ namespace OrderingSystem.WebApi.Controllers
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TablesController.cs
 ----------------------------------------
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged; 
 using OrderingSystem.Application.Interfaces.TableInterfaces;
@@ -948,6 +961,7 @@ namespace OrderingSystem.WebApi.Controllers
         // الكود القديم الخاص بك (لم يتم تغييره)
         // ==========================================
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> AddTable([FromBody] AddTableRequest request)
         {
@@ -960,6 +974,7 @@ namespace OrderingSystem.WebApi.Controllers
             return CreatedAtAction(nameof(GetTableById), new { tableId = result.Value!.TableId }, result.Value);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpPut]
         public async Task<IActionResult> UpdateTable([FromBody] UpdateTableRequest request)
         {
@@ -972,7 +987,8 @@ namespace OrderingSystem.WebApi.Controllers
             }
             return Ok(result.Value);
         }
-        
+
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{tableId}")]
         public async Task<IActionResult> DeleteTable(int tableId)
         {
@@ -986,6 +1002,7 @@ namespace OrderingSystem.WebApi.Controllers
             return NoContent();
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{tableId}/qrcode")]
         public async Task<IActionResult> GetQrCode(int tableId)
         {
@@ -995,8 +1012,9 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(new { QrCode = qrCode });
         }
 
-        
 
+
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{tableId}")]
         public async Task<IActionResult> GetTableById(int tableId)
         {
@@ -1006,6 +1024,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("floor/{floorNumber}/number/{tableNumber}")]
         public async Task<IActionResult> GetTableByNumber(int tableNumber, int floorNumber)
         {
@@ -1015,6 +1034,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("floor/{floorNumber}")]
         public async Task<IActionResult> GetAllTablesByFloor([FromQuery] PageDTO page, int floorNumber)
         {
@@ -1022,6 +1042,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet]
         public async Task<IActionResult> GetAllTables([FromQuery] PageDTO page)
         {
@@ -1029,6 +1050,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("status/{tableStatus}")]
         public async Task<IActionResult> GetAllTablesByStatus([FromQuery] PageDTO page, enTableStatus tableStatus)
         {
@@ -1036,6 +1058,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("pending-activation")]
         public async Task<IActionResult> GetAllPendingActivationTables([FromQuery] PageDTO page)
         {
@@ -1043,6 +1066,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("billing")]
         public async Task<IActionResult> GetAllBillingTables([FromQuery] PageDTO page)
         {
@@ -1141,15 +1165,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        // ── CASHIER PATH: Approve the bill ──────────────────────────────────────
-        [Authorize(Roles = "Admin,Cashier")]
-        [HttpPost("approve-bill")]
-        public async Task<IActionResult> ApproveBill([FromBody] ApproveBillRequest request)
-        {
-            var result = await _sessionCommandService.ApproveBillAsync(request.tableSessionId);
-            return HandleResult(result);
-        }
-
         // ── CASHIER PATH: Close session after payment ───────────────────────────
         [Authorize(Roles = "Admin,Cashier")]
         [HttpPost("end")]
@@ -1244,6 +1259,7 @@ namespace OrderingSystem.WebApi.Controllers
             _taxCommandService = taxCommandService;
             _taxQuery = taxQuery;
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpPost]
         public async Task<IActionResult> AddTax([FromBody] TaxRecords.AddTaxRequest request)
@@ -1251,6 +1267,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _taxCommandService.AddTaxAsync(request);
             return HandleCreatedResult(result, nameof(GetTaxById), new { id = result.Value?.TaxId });
         }
+        [Authorize(Roles = "Admin,Cashier")]
 
         [HttpPut]
         public async Task<IActionResult> UpdateTax([FromBody] TaxRecords.UpdateTaxRequest request)
@@ -1259,6 +1276,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteTax(int id)
         {
@@ -1266,6 +1284,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetTaxById(int id)
         {
@@ -1273,6 +1292,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet]
         [AllowAnonymous] // Or change to [Authorize(Roles = "Admin,Cashier")] based on your needs
         public async Task<IActionResult> GetAllTaxes([FromQuery] PageDTO page)
@@ -1650,7 +1670,6 @@ namespace OrderingSystem.Application.DTOs
     public record ActivateTableSessionRequest([Required] Guid tableSessionId); 
     public record DeactivateSessionByAdminRequest([Required] int tableId);
     public record RequestBillRequest([Required] Guid tableSessionId);
-    public record ApproveBillRequest([Required] Guid tableSessionId);
     public record AppliedTaxResponse(string NameEn, string NameAr, decimal Amount);
 
 
@@ -1993,7 +2012,6 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyCustomerOfOrderStatusAsync(Guid deviceSessionId, int orderId, enOrderStatus status);
         public Task NotifyCashiersOfCustomerCancellationAsync(int orderId, Guid tableSessionId);
         public Task NotifyCashiersOfBillRequestAsync(Guid tableSessionId, int tableNumber);
-        public Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId);
         public Task NotifyMenuUpdatedAsync();
         public Task NotifyCustomerOfActivationDismissedAsync(Guid tableSessionId);
         public Task NotifyCustomerOfBillRejectedAsync(Guid tableSessionId);
@@ -2021,7 +2039,6 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveNewOrderNotification(int orderId, Guid tableSessionId, string message);
         public Task ReceiveOrderStatusUpdate(int orderId, enOrderStatus status, string message);
         public Task ReceiveBillRequestNotification(Guid tableSessionId, int tableNumber, string message);
-        public Task ReceiveBillApprovalNotification(Guid tableSessionId, string message);
         public Task ReceiveMenuUpdated(string message);
         public Task ReceiveActivationDismissed(string message);
         public Task ReceiveBillRejected(string message);
@@ -2165,7 +2182,6 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
         public Task<Result> DeactivateTableSessionAsync(Guid tableSessionId);
         public Task<Result<SessionResponse>> EndTableSessionAsync(Guid tableSessionId);
         public Task<Result> RequestBillAsync(Guid tableSessionId, Guid deviceSessionId);
-        public Task<Result> ApproveBillAsync(Guid tableSessionId);
         public Task<Result> DismissTableSessionAsync(Guid tableSessionId);
         public Task<Result> DismissBillAsync(Guid tableSessionId);
     }
@@ -3176,7 +3192,7 @@ namespace OrderingSystem.Application.Services
                 return Result<SessionResponse>.Failure("Table was not found.", enErrorType.NotFound);
             }
 
-            var activeSession = table.Sessions.FirstOrDefault();
+            var activeSession = table.Sessions.FirstOrDefault(s => s.ClosedAt == null && s.Status != enSessionStatus.Closed);
 
             if (activeSession != null)
             {
@@ -3189,6 +3205,9 @@ namespace OrderingSystem.Application.Services
             }
 
             table.Status = enTableStatus.Occupied;
+
+            await _tableRepository.UpdateTableAsync(table);
+
             return await ActivateTableSessionAsync(table.TableId, Guid.CreateVersion7());
         }
 
@@ -3344,36 +3363,16 @@ namespace OrderingSystem.Application.Services
             if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
                 return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
 
-            if(session.Orders.Count == 0)
+            if (session.Orders.Count == 0)
                 return Result.Failure("No orders available for billing.", enErrorType.Validation);
 
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
 
-            // Notify the cashiers
+            // This acts as the single "AcceptPayment" notification to the cashier
             await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
 
             table.Status = enTableStatus.Billing;
             await _tableRepository.UpdateTableAsync(table);
-
-            return Result.Success();
-        }
-
-        public async Task<Result> ApproveBillAsync(Guid tableSessionId)
-        {
-            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
-            if (session == null)
-                return Result.Failure("No active table session was found.", enErrorType.NotFound);
-
-            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
-            if (table == null)
-                return Result.Failure("Table not found.", enErrorType.NotFound);
-
-            // Change table status to Billing
-            table.Status = enTableStatus.Billing;
-            await _tableRepository.UpdateTableAsync(table);
-
-            // Notify the customer
-            await _notifier.NotifyCustomerOfBillApprovalAsync(tableSessionId);
 
             return Result.Success();
         }
@@ -3432,7 +3431,9 @@ namespace OrderingSystem.Application.Services
 
             await _notifier.NotifyCustomerOfActivationDismissedAsync(tableSessionId);
 
-            await _tableSessionRepository.DeleteSessionAsync(session);
+            session.Status = enSessionStatus.Closed;
+            session.ClosedAt = DateTime.UtcNow;
+            await _tableSessionRepository.UpdateSessionAsync(session);
 
             return Result.Success();
         }
@@ -4378,13 +4379,6 @@ namespace OrderingSystem.Infrastructure.Notifications
         {
             await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
                 .ReceiveBillRequestNotification(tableSessionId, tableNumber, $"Table {tableNumber} is requesting the bill.");
-        }
-
-        public async Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId)
-        {
-            // Broadcast to the entire table session group so all devices at the table know the bill is ready
-            await _hubContext.Clients.Group(tableSessionId.ToString())
-                .ReceiveBillApprovalNotification(tableSessionId, "Your bill has been prepared and approved by the cashier.");
         }
 
         public async Task NotifyMenuUpdatedAsync()

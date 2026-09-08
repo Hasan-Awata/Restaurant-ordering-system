@@ -2,6 +2,7 @@
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
+using OrderingSystem.Application.Interfaces.TaxesInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Data;
@@ -16,10 +17,12 @@ namespace OrderingSystem.Infrastructure.Queries
     public class OrderQuery : IOrderQuery
     {
         private readonly OrderingSystemDbContext _context;
+        private readonly ITaxCalculationService _taxCalculationService;
 
-        public OrderQuery(OrderingSystemDbContext context)
+        public OrderQuery(OrderingSystemDbContext context, ITaxCalculationService taxCalculationService)
         {
             _context = context;
+            _taxCalculationService = taxCalculationService;
         }
 
         public async Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page)
@@ -116,10 +119,8 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             try
             {
-                // تحديد تاريخ اليوم الحالي
                 var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
 
-                // حساب الطلبات التي تم إنشاؤها اليوم فقط
                 var count = await _context.Orders
                     .Where(o => o.CreatedAt.Date == today)
                     .CountAsync();
@@ -168,9 +169,7 @@ namespace OrderingSystem.Infrastructure.Queries
         }
 
         public async Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(
-            DateTime startDate,
-            DateTime endDate,
-            PageDTO page)
+                DateTime startDate, DateTime endDate, PageDTO page)
         {
             var activeTaxes = await _context.Taxes
                 .AsNoTracking()
@@ -207,76 +206,48 @@ namespace OrderingSystem.Infrastructure.Queries
                 .ToListAsync();
 
             var items = ordersForSessions
-                .GroupBy(o => o.TableSessionId)
-                .Select(g =>
-                {
-                    var firstOrder = g.OrderBy(o => o.CreatedAt).First();
-                    var lastOrder = g.OrderByDescending(o => o.CreatedAt).First();
-
-                    var groupedItems = g.SelectMany(o => o.OrderItems)
-                        .GroupBy(oi => oi.MenuItemId)
-                        .Select(itemGroup =>
+                        .GroupBy(o => o.TableSessionId)
+                        .Select(g =>
                         {
-                            var firstItem = itemGroup.First();
-                            var totalQuantity = itemGroup.Sum(i => i.Quantity);
+                            var firstOrder = g.OrderBy(o => o.CreatedAt).First();
+                            var lastOrder = g.OrderByDescending(o => o.CreatedAt).First();
 
-                            return new OrderRecords.BillItemResponse(
-                                firstItem.MenuItemId,
-                                firstItem.MenuItem != null ? firstItem.MenuItem.NameAr : "Deleted Item",
-                                firstItem.MenuItem != null ? firstItem.MenuItem.NameEn : "Deleted Item",
-                                totalQuantity,
-                                firstItem.UnitPrice,
-                                totalQuantity * firstItem.UnitPrice
+                            var groupedItems = g.SelectMany(o => o.OrderItems)
+                                .GroupBy(oi => oi.MenuItemId)
+                                .Select(itemGroup =>
+                                {
+                                    var firstItem = itemGroup.First();
+                                    var totalQuantity = itemGroup.Sum(i => i.Quantity);
+
+                                    return new OrderRecords.BillItemResponse(
+                                        firstItem.MenuItemId,
+                                        firstItem.MenuItem != null ? firstItem.MenuItem.NameAr : "Deleted Item",
+                                        firstItem.MenuItem != null ? firstItem.MenuItem.NameEn : "Deleted Item",
+                                        totalQuantity,
+                                        firstItem.UnitPrice,
+                                        totalQuantity * firstItem.UnitPrice
+                                    );
+                                }).ToList();
+
+                            decimal subTotal = g.Sum(o => o.TotalAmount);
+                            var uniqueGuests = g.Select(o => o.DeviceSessionId).Distinct().Count();
+                            var totalItemsCount = groupedItems.Sum(i => i.Quantity);
+
+                            var taxResult = _taxCalculationService.CalculateTaxes(subTotal, uniqueGuests, totalItemsCount, activeTaxes);
+                            var grandTotal = subTotal + taxResult.TotalTaxAmount;
+
+                            return new HistoricalBillResponse(
+                                firstOrder.OrderId.ToString(),
+                                firstOrder.Session.Table.TableNumber,
+                                firstOrder.TableSessionId.ToString(),
+                                firstOrder.OrderStatus.ToString(),
+                                lastOrder.CreatedAt,
+                                subTotal,
+                                grandTotal, 
+                                groupedItems,
+                                taxResult.AppliedTaxes 
                             );
                         }).ToList();
-
-                    decimal subTotal = g.Sum(o => o.TotalAmount);
-                    var appliedTaxes = new List<AppliedTaxResponse>();
-                    decimal totalTaxAmount = 0;
-
-                    var uniqueGuests = g.Select(o => o.DeviceSessionId).Distinct().Count();
-                    var totalItemsCount = groupedItems.Sum(i => i.Quantity);
-
-                    foreach (var tax in activeTaxes)
-                    {
-                        decimal taxAmount = 0;
-
-                        if (tax.TaxType == enTaxType.Percentage)
-                        {
-                            if (tax.TaxScope == enTaxScope.PerBill)
-                                taxAmount = subTotal * (tax.Amount / 100m);
-                        }
-                        else if (tax.TaxType == enTaxType.FlatRate)
-                        {
-                            if (tax.TaxScope == enTaxScope.PerBill)
-                                taxAmount = tax.Amount;
-                            else if (tax.TaxScope == enTaxScope.PerGuest)
-                                taxAmount = tax.Amount * (uniqueGuests > 0 ? uniqueGuests : 1);
-                            else if (tax.TaxScope == enTaxScope.PerItem)
-                                taxAmount = tax.Amount * totalItemsCount;
-                        }
-
-                        if (taxAmount > 0)
-                        {
-                            appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, Math.Round(taxAmount, 2)));
-                            totalTaxAmount += taxAmount;
-                        }
-                    }
-
-                    return new HistoricalBillResponse(
-                        $"BILL-{firstOrder.OrderId}",
-                        firstOrder.Session?.Table?.TableNumber ?? 0,
-                        g.Key.ToString(),
-                        lastOrder.OrderStatus.ToString().ToLower(),
-                        lastOrder.CreatedAt,
-                        subTotal,
-                        subTotal + totalTaxAmount,
-                        groupedItems,
-                        appliedTaxes
-                    );
-                })
-                .OrderByDescending(x => x.CreatedAt)
-                .ToList();
 
             var pagedResponse = new PagedResponse<HistoricalBillResponse>(items, totalRecords, page.PageNumber, page.PageSize);
             return Result<PagedResponse<HistoricalBillResponse>>.Success(pagedResponse);
