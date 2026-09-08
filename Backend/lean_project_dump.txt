@@ -375,12 +375,12 @@ FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controlle
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
 using OrderingSystem.Application.DTOs.Paged;
-using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.WebApi.Controllers.Base;
+using System;
+using System.Threading.Tasks;
 
 namespace OrderingSystem.Controllers
 {
@@ -397,13 +397,14 @@ namespace OrderingSystem.Controllers
             _tableQuery = tableQuery;
         }
 
-         [Authorize(Roles = "Admin,Cashier")]
-          [HttpGet("top-three-today")]
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpGet("top-three-today")]
         public async Task<IActionResult> GetTopThreeItemsToday()
         {
             var result = await _orderQuery.GetTopThreeItemsTodayAsync();
             return HandleResult(result);
         }
+
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("pending-count-orders")]
         public async Task<IActionResult> GetCountOfPendingOrders()
@@ -412,20 +413,13 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-       [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-orders")]
         public async Task<IActionResult> GetCountOfOrders()
         {
             var result = await _orderQuery.GetCountOfOrders();
             return HandleResult(result);
         }
-        //  [Authorize(Roles = "Admin,Cashier")]
-        //[HttpGet("total-count-table")]
-        //public async Task<IActionResult> GetCountOfOccupiedTables()
-        //{
-        //    var result = await _tableQuery.GetCountOfOccupiedTables();
-        //    return HandleResult(result);
-        //}
 
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-table")]
@@ -436,19 +430,18 @@ namespace OrderingSystem.Controllers
         }
 
         [Authorize(Roles = "Admin")]
-        [HttpGet("historical-orders")]
-        public async Task<IActionResult> GetHistoricalOrders(
+        [HttpGet("historical-bills")] 
+        public async Task<IActionResult> GetHistoricalBills(
             [FromQuery] DateTime startDate,
             [FromQuery] DateTime endDate,
             [FromQuery] PageDTO page)
         {
-            var result = await _orderQuery.GetOrdersByDateRangeAsync(startDate, endDate, page);
+        
+            var result = await _orderQuery.GetHistoricalBillsAsync(startDate, endDate, page);
             return HandleResult(result);
         }
-
     }
 }
-
 
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\AuthController.cs
@@ -1601,6 +1594,7 @@ namespace OrderingSystem.Application.DTOs
         public record HistoricalBillResponse(
         string OrderId,
         int TableNumber,
+        string TableSessionId,
         string Status,
         DateTime CreatedAt,
         decimal TotalAmount,
@@ -1682,7 +1676,15 @@ namespace OrderingSystem.Application.DTOs
         [Required] enTableStatus Status);
 
     // Query/Command Response Payloads
-    public record TableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status);
+    public record TableResponse(
+        int TableId,
+        int TableNumber,
+        int FloorNumber,
+        string QrCode,
+        enTableStatus Status,
+        Guid? TableSessionId = null 
+    );
+    
     public record PendingTableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status, Guid TableSessionId, DateTime? CreatedAt);
 }
 
@@ -3412,25 +3414,21 @@ namespace OrderingSystem.Application.Services
 
         public async Task<Result<TableResponse>> AddTableAsync(AddTableRequest request)
         {
-            // Business Rule: Check if table number on that floor already exists
             var existingTable = await _tableRepository.GetByNumberAndFloorWithDeletedAsync(request.TableNumber, request.FloorNumber);
 
             if (existingTable != null)
             {
                 if (!existingTable.IsDeleted)
                 {
-                    // The table exists and is active
                     return Result<TableResponse>.Failure(
                         $"Table {request.TableNumber} already exists on Floor {request.FloorNumber}.",
                         enErrorType.Validation);
                 }
 
-                // 2. Delegate to the private restore method
                 var restoredResponse = await RestoreTableAsync(existingTable, request);
                 return Result<TableResponse>.Success(restoredResponse);
             }
 
-            // Generate unique QR Code payload
             string uniqueSegment = RandomNumberGenerator.GetHexString(4);
             string generatedQrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{uniqueSegment}".ToUpper();
 
@@ -3444,8 +3442,8 @@ namespace OrderingSystem.Application.Services
 
             await _tableRepository.AddTableAsync(newTable);
 
-            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status);
-            
+            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status, null);
+
             return Result<TableResponse>.Success(response);
         }
 
@@ -3457,7 +3455,6 @@ namespace OrderingSystem.Application.Services
                 return Result<TableResponse>.Failure("Table not found.", enErrorType.NotFound);
             }
 
-            // If changing floor/number, ensure no conflict
             if ((table.TableNumber != request.TableNumber || table.FloorNumber != request.FloorNumber) &&
                 await _tableRepository.ExistsAsync(request.TableNumber, request.FloorNumber))
             {
@@ -3468,11 +3465,9 @@ namespace OrderingSystem.Application.Services
             table.FloorNumber = request.FloorNumber;
             table.Status = request.Status;
 
-            // Note: We deliberately do NOT update the QR code here, as the physical QR sticker on the table shouldn't break.
-
             await _tableRepository.UpdateTableAsync(table);
 
-            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status);
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null);
             return Result<TableResponse>.Success(response);
         }
 
@@ -3484,7 +3479,6 @@ namespace OrderingSystem.Application.Services
                 return Result.Failure("Table not found.", enErrorType.NotFound);
             }
 
-            // Optional Business Rule: Check if table has active sessions before deleting
             if (table.Status != enTableStatus.Available)
             {
                 return Result.Failure("Cannot delete a table that is currently occupied or billing.", enErrorType.Validation);
@@ -3502,13 +3496,12 @@ namespace OrderingSystem.Application.Services
                 return Result<TableResponse>.Failure("Table was not found.", enErrorType.NotFound);
             }
 
-            // Regenerate the QR Code for security so old printed codes become invalid
             string newUniqueSegment = RandomNumberGenerator.GetHexString(4);
             table.QrCode = $"TBL-F{table.FloorNumber}-N{table.TableNumber}-{newUniqueSegment}".ToUpper();
 
             await _tableRepository.UpdateTableAsync(table);
 
-            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status);
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null);
             return Result<TableResponse>.Success(response);
         }
 
@@ -3517,7 +3510,6 @@ namespace OrderingSystem.Application.Services
             existingTable.IsDeleted = false;
             existingTable.Status = enTableStatus.Available;
 
-            // Regenerate the QR Code for security so old printed codes become invalid
             string newUniqueSegment = RandomNumberGenerator.GetHexString(4);
             existingTable.QrCode = $"TBL-F{request.FloorNumber}-N{request.TableNumber}-{newUniqueSegment}".ToUpper();
 
@@ -3528,7 +3520,8 @@ namespace OrderingSystem.Application.Services
                 existingTable.TableNumber,
                 existingTable.FloorNumber,
                 existingTable.QrCode,
-                existingTable.Status
+                existingTable.Status,
+                null
             );
         }
     }
@@ -10049,42 +10042,81 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
         }
 
-        // ---------- الدالة المعدلة لسجل الفواتير ----------
         public async Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(
             DateTime startDate,
             DateTime endDate,
             PageDTO page)
         {
-            var query = _context.Orders
+            // 1. تحديد الجلسات (Sessions) ضمن الفترة الزمنية المحددة (تجميع حسب TableSessionId)
+            var sessionQuery = _context.Orders
+                .AsNoTracking()
+                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate && o.TableSessionId != null)
+                .GroupBy(o => o.TableSessionId)
+                .Select(g => new
+                {
+                    SessionId = g.Key,
+                    LastOrderDate = g.Max(o => o.CreatedAt)
+                });
+
+            // 2. حساب العدد الإجمالي للجلسات
+            var totalRecords = await sessionQuery.CountAsync();
+
+            // 3. جلب TableSessionIds للصفحة الحالية
+            var pagedSessions = await sessionQuery
+                .OrderByDescending(x => x.LastOrderDate)
+                .Skip((page.PageNumber - 1) * page.PageSize)
+                .Take(page.PageSize)
+                .ToListAsync();
+
+            var sessionIds = pagedSessions.Select(s => s.SessionId).ToList();
+
+            // 4. جلب جميع الطلبات التي تخص جلسات هذه الصفحة
+            var ordersForSessions = await _context.Orders
                 .AsNoTracking()
                 .Include(o => o.OrderItems)
                     .ThenInclude(oi => oi.MenuItem)
                 .Include(o => o.Session)
                     .ThenInclude(s => s.Table)
-                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate);
-
-            var totalRecords = await query.CountAsync();
-
-            var items = await query
-                .OrderByDescending(o => o.CreatedAt)
-                .Skip((page.PageNumber - 1) * page.PageSize)
-                .Take(page.PageSize)
-                .Select(o => new HistoricalBillResponse(
-                    $"BILL-{o.OrderId}",
-                    o.Session != null && o.Session.Table != null ? o.Session.Table.TableNumber : 0,
-                    o.OrderStatus.ToString().ToLower(),
-                    o.CreatedAt,
-                    o.TotalAmount,
-                    o.OrderItems.Select(i => new OrderingSystem.Application.DTOs.OrderRecords.BillItemResponse(
-                        i.MenuItemId,
-                        i.MenuItem != null ? i.MenuItem.NameAr : "عنصر محذوف",
-                        i.MenuItem != null ? i.MenuItem.NameEn : "Deleted Item",
-                        i.Quantity,
-                        i.UnitPrice,
-                        i.Quantity * i.UnitPrice
-                    )).ToList()
-                ))
+                .Where(o => sessionIds.Contains(o.TableSessionId))
                 .ToListAsync();
+
+            // 5. تجميع المعاملات في الذاكرة لتشكيل الفواتير المجمعة
+            var items = ordersForSessions
+                .GroupBy(o => o.TableSessionId)
+                .Select(g =>
+                {
+                    var firstOrder = g.OrderBy(o => o.CreatedAt).First();
+                    var lastOrder = g.OrderByDescending(o => o.CreatedAt).First();
+
+                    var groupedItems = g.SelectMany(o => o.OrderItems)
+                        .GroupBy(oi => oi.MenuItemId)
+                        .Select(itemGroup =>
+                        {
+                            var firstItem = itemGroup.First();
+                            var totalQuantity = itemGroup.Sum(i => i.Quantity);
+
+                            return new OrderRecords.BillItemResponse(
+                                firstItem.MenuItemId,
+                                firstItem.MenuItem != null ? firstItem.MenuItem.NameAr : "عنصر محذوف",
+                                firstItem.MenuItem != null ? firstItem.MenuItem.NameEn : "Deleted Item",
+                                totalQuantity,
+                                firstItem.UnitPrice,
+                                totalQuantity * firstItem.UnitPrice
+                            );
+                        }).ToList();
+
+                    return new HistoricalBillResponse(
+                        $"BILL-{firstOrder.OrderId}",
+                        firstOrder.Session?.Table?.TableNumber ?? 0,
+                        g.Key.ToString(),
+                        lastOrder.OrderStatus.ToString().ToLower(),
+                        lastOrder.CreatedAt,
+                        g.Sum(o => o.TotalAmount),
+                        groupedItems
+                    );
+                })
+                .OrderByDescending(x => x.CreatedAt)
+                .ToList();
 
             var pagedResponse = new PagedResponse<HistoricalBillResponse>(items, totalRecords, page.PageNumber, page.PageSize);
             return Result<PagedResponse<HistoricalBillResponse>>.Success(pagedResponse);
@@ -10131,13 +10163,15 @@ namespace OrderingSystem.Infrastructure.Queries
             var table = await _context.Tables
                 .AsNoTracking()
                 .Where(t => t.TableId == tableId)
-                .Select(t => new TableResponse
-                (
+                .Select(t => new TableResponse(
                     t.TableId,
                     t.TableNumber,
                     t.FloorNumber,
                     t.QrCode,
-                    t.Status
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
                 ))
                 .FirstOrDefaultAsync();
             return table;
@@ -10148,13 +10182,15 @@ namespace OrderingSystem.Infrastructure.Queries
             var table = await _context.Tables
                 .AsNoTracking()
                 .Where(t => t.TableNumber == tableNumber && t.FloorNumber == floorNumber)
-                .Select(t => new TableResponse
-                (
+                .Select(t => new TableResponse(
                     t.TableId,
                     t.TableNumber,
                     t.FloorNumber,
                     t.QrCode,
-                    t.Status
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
                 ))
                 .FirstOrDefaultAsync();
             return table;
@@ -10170,7 +10206,16 @@ namespace OrderingSystem.Infrastructure.Queries
             var tables = await query
                 .Skip((page.PageNumber - 1) * page.PageSize)
                 .Take(page.PageSize)
-                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
+                .Select(t => new TableResponse(
+                    t.TableId,
+                    t.TableNumber,
+                    t.FloorNumber,
+                    t.QrCode,
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
+                ))
                 .ToListAsync();
 
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
@@ -10184,7 +10229,16 @@ namespace OrderingSystem.Infrastructure.Queries
             var tables = await query
                 .Skip((page.PageNumber - 1) * page.PageSize)
                 .Take(page.PageSize)
-                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
+                .Select(t => new TableResponse(
+                    t.TableId,
+                    t.TableNumber,
+                    t.FloorNumber,
+                    t.QrCode,
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
+                ))
                 .ToListAsync();
 
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
@@ -10201,7 +10255,16 @@ namespace OrderingSystem.Infrastructure.Queries
             var tables = await query
                 .Skip((page.PageNumber - 1) * page.PageSize)
                 .Take(page.PageSize)
-                .Select(t => new TableResponse(t.TableId, t.TableNumber, t.FloorNumber, t.QrCode, t.Status))
+                .Select(t => new TableResponse(
+                    t.TableId,
+                    t.TableNumber,
+                    t.FloorNumber,
+                    t.QrCode,
+                    t.Status,
+                    (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
+                        ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
+                        : null
+                ))
                 .ToListAsync();
 
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);

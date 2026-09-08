@@ -17,5 +17,8 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyCashiersOfBillRequestAsync(Guid tableSessionId, int tableNumber);
         public Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId);
         public Task NotifyMenuUpdatedAsync();
+        public Task NotifyCustomerOfActivationDismissedAsync(Guid tableSessionId);
+        public Task NotifyCustomerOfBillRejectedAsync(Guid tableSessionId);
+        public Task NotifyCustomerOfOrderRejectedAsync(Guid deviceSessionId, int orderId);
     }
 }

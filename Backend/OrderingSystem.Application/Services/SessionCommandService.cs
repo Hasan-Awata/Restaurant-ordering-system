@@ -279,5 +279,49 @@ namespace OrderingSystem.Application.Services
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
         }
+
+        public async Task<Result> DismissTableSessionAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetSessionByIdAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("Table session not found.", enErrorType.NotFound);
+
+            if (session.Status != enSessionStatus.PendingActivation)
+                return Result.Failure("Session is not pending activation.", enErrorType.Conflict);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table != null)
+            {
+                table.Status = enTableStatus.Available;
+                await _tableRepository.UpdateTableAsync(table);
+            }
+
+            await _notifier.NotifyCustomerOfActivationDismissedAsync(tableSessionId);
+
+            await _tableSessionRepository.DeleteSessionAsync(session);
+
+            return Result.Success();
+        }
+
+        public async Task<Result> DismissBillAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+            if (table == null)
+                return Result.Failure("Table not found.", enErrorType.NotFound);
+
+            if (table.Status == enTableStatus.Billing)
+            {
+                table.Status = enTableStatus.Occupied;
+                await _tableRepository.UpdateTableAsync(table);
+            }
+
+            await _notifier.NotifyCustomerOfBillRejectedAsync(tableSessionId);
+
+            return Result.Success();
+        }
     }
 }

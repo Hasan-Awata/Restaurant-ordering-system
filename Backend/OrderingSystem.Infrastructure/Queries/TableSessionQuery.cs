@@ -38,91 +38,95 @@ namespace OrderingSystem.Infrastructure.Queries
             var session = await _context.TableSessions
                 .AsNoTracking()
                 .Include(s => s.Devices)
-                .Include(s => s.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled))
+                .Include(s => s.Orders)
                     .ThenInclude(o => o.OrderItems)
                         .ThenInclude(oi => oi.MenuItem)
                 .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId);
 
-            if (session == null) return null;
+            if (session == null)
+                return null;
+
+            var activeTaxes = await _context.Taxes
+                .AsNoTracking()
+                .Where(t => t.IsActive && !t.IsDeleted)
+                .ToListAsync();
+
+            var validOrders = session.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled).ToList();
 
             var guestBills = new List<GuestBillResponse>();
             decimal totalSubTotal = 0;
-            int totalItemsQuantity = 0; // Track this for PerItem taxes
 
             foreach (var device in session.Devices)
             {
-                var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
-                if (!deviceOrders.Any()) continue;
+                var deviceOrders = validOrders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
 
-                var groupedItems = deviceOrders
+                var billItems = deviceOrders
                     .SelectMany(o => o.OrderItems)
                     .GroupBy(oi => oi.MenuItemId)
-                    .Select(g => new BillItemResponse(
-                        g.Key,
-                        g.First().MenuItem?.NameEn ?? "Deleted Item",
-                        g.First().MenuItem?.NameAr ?? "عنصر محذوف",
-                        g.Sum(oi => oi.Quantity),
-                        g.First().UnitPrice,
-                        g.Sum(oi => oi.Quantity * oi.UnitPrice)
-                    )).ToList();
+                    .Select(g =>
+                    {
+                        var first = g.First();
+                        var totalQty = g.Sum(oi => oi.Quantity);
+                        return new BillItemResponse(
+                            first.MenuItemId,
+                            first.MenuItem?.NameEn ?? "Deleted Item",
+                            first.MenuItem?.NameAr ?? "Deleted Item",
+                            totalQty,
+                            first.UnitPrice,
+                            totalQty * first.UnitPrice
+                        );
+                    })
+                    .ToList();
 
-                decimal subTotal = groupedItems.Sum(i => i.TotalPrice);
-                totalSubTotal += subTotal;
-                totalItemsQuantity += groupedItems.Sum(i => i.Quantity);
+                decimal guestSubTotal = billItems.Sum(i => i.TotalPrice);
+                totalSubTotal += guestSubTotal;
 
-                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, groupedItems, subTotal));
+                guestBills.Add(new GuestBillResponse(
+                    device.DeviceSessionId,
+                    device.Role,
+                    billItems,
+                    guestSubTotal
+                ));
             }
-
-            // 1. Fetch active taxes dynamically
-            var activeTaxes = await _context.Taxes
-                .AsNoTracking()
-                .Where(t => t.IsActive)
-                .ToListAsync();
 
             var appliedTaxes = new List<AppliedTaxResponse>();
             decimal totalTaxAmount = 0;
 
-            // 2. Process each tax based on its Type and Scope
+            var uniqueGuestsCount = session.Devices.Count;
+            var totalItemsCount = validOrders.SelectMany(o => o.OrderItems).Sum(oi => oi.Quantity);
+
             foreach (var tax in activeTaxes)
             {
-                decimal calculatedAmount = 0;
+                decimal taxAmount = 0;
 
                 if (tax.TaxType == enTaxType.Percentage)
                 {
-                    // Percentages apply to the subtotal
-                    calculatedAmount = totalSubTotal * (tax.Amount / 100m);
+                    if (tax.TaxScope == enTaxScope.PerBill)
+                        taxAmount = totalSubTotal * (tax.Amount / 100m);
                 }
                 else if (tax.TaxType == enTaxType.FlatRate)
                 {
-                    switch (tax.TaxScope)
-                    {
-                        case enTaxScope.PerBill:
-                            calculatedAmount = tax.Amount;
-                            break;
-                        case enTaxScope.PerGuest:
-                            calculatedAmount = tax.Amount * session.Devices.Count;
-                            break;
-                        case enTaxScope.PerItem:
-                            calculatedAmount = tax.Amount * totalItemsQuantity;
-                            break;
-                    }
+                    if (tax.TaxScope == enTaxScope.PerBill)
+                        taxAmount = tax.Amount;
+                    else if (tax.TaxScope == enTaxScope.PerGuest)
+                        taxAmount = tax.Amount * uniqueGuestsCount;
+                    else if (tax.TaxScope == enTaxScope.PerItem)
+                        taxAmount = tax.Amount * totalItemsCount;
                 }
 
-                if (calculatedAmount > 0)
+                if (taxAmount > 0)
                 {
-                    appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, calculatedAmount));
-                    totalTaxAmount += calculatedAmount;
+                    appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, Math.Round(taxAmount, 2)));
+                    totalTaxAmount += taxAmount;
                 }
             }
 
-            decimal grandTotal = totalSubTotal + totalTaxAmount;
-
             return new BillSummaryResponse(
-                session.TableSessionId,
+                tableSessionId,
                 guestBills,
                 totalSubTotal,
-                appliedTaxes, 
-                grandTotal
+                appliedTaxes,
+                totalSubTotal + totalTaxAmount
             );
         }
         public async Task<SessionPollingResponse?> GetSessionPollingStatusAsync(Guid tableSessionId, Guid deviceSessionId)

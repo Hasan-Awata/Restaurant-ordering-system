@@ -114,6 +114,22 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("dismiss")]
+        public async Task<IActionResult> DismissTableSession([FromBody] ActivateTableSessionRequest request)
+        {
+            var result = await _sessionCommandService.DismissTableSessionAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
+        [Authorize(Roles = "Admin,Cashier")]
+        [HttpPost("dismiss-bill")]
+        public async Task<IActionResult> DismissBill([FromBody] ActivateTableSessionRequest request)
+        {
+            var result = await _sessionCommandService.DismissBillAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
         // 2. READ ENDPOINT (Query Path)
         [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("active/{tableId}")]
@@ -129,7 +145,6 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpGet("{tableSessionId}/status")]
         public async Task<IActionResult> GetSessionPollingStatus(Guid tableSessionId)
         {
-            // التحقق من وجود DeviceSessionId صالح في الـ Cookies
             if (!CurrentDeviceSessionId.HasValue)
             {
                 return Unauthorized(new { error = "Invalid or missing device session." });

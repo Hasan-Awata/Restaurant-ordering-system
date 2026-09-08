@@ -80,5 +80,22 @@ namespace OrderingSystem.Infrastructure.Notifications
             // Broadcasting to All ensures every active customer app refreshes the menu
             await _hubContext.Clients.All.ReceiveMenuUpdated("The menu has been updated.");
         }
+        public async Task NotifyCustomerOfActivationDismissedAsync(Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveActivationDismissed("Table activation was dismissed.");
+        }
+
+        public async Task NotifyCustomerOfBillRejectedAsync(Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveBillRejected("Your bill request was rejected.");
+        }
+
+        public async Task NotifyCustomerOfOrderRejectedAsync(Guid deviceSessionId, int orderId)
+        {
+            await _hubContext.Clients.Group(deviceSessionId.ToString())
+                .ReceiveOrderRejected(orderId, "Your order request was rejected.");
+        }
     }
 }
