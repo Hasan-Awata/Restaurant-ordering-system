@@ -31,7 +31,7 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
         {
             var result = await _authCommandService.CreateUserAsync(request);
-
+             
             return HandleResult(result);
         }
         
