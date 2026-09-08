@@ -18,7 +18,7 @@ namespace OrderingSystem.WebApi.Controllers
             _authCommandService = authCommandService;
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
@@ -26,7 +26,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin")]
+        //[Authorize(Roles = "Admin")]
         [HttpPost("register")]
         public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
         {
@@ -42,7 +42,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+       //[Authorize(Roles = "Admin,Cashier")]
 
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
