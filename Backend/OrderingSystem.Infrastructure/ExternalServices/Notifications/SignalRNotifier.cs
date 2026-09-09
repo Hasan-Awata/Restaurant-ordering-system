@@ -97,5 +97,11 @@ namespace OrderingSystem.Infrastructure.Notifications
             await _hubContext.Clients.Group(tableSessionId.ToString())
                 .ReceiveSessionEnded("The table session has been closed. Thank you!");
         }
+        public async Task NotifyGuestsOfBillRequestAsync(Guid tableSessionId)
+        {
+            // Target the group containing ALL devices (Host + Guests) at this specific table
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveBillRequested(tableSessionId.ToString());
+        }
     }
 }

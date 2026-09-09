@@ -221,6 +221,8 @@ namespace OrderingSystem.Application.Services
             // This acts as the single "AcceptPayment" notification to the cashier
             await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
 
+            await _notifier.NotifyGuestsOfBillRequestAsync(tableSessionId);
+
             table.Status = enTableStatus.Billing;
             await _tableRepository.UpdateTableAsync(table);
 
