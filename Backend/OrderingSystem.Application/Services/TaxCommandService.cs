@@ -1,4 +1,5 @@
 ﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.TaxesInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
@@ -7,7 +8,13 @@ using OrderingSystem.Domain.Enums;
 public class TaxCommandService : ITaxCommandService
 {
     private readonly ITaxRepository _taxRepository;
-    public TaxCommandService(ITaxRepository taxRepository) => _taxRepository = taxRepository;
+    private readonly IRealTimeNotifier _notifier; 
+
+    public TaxCommandService(ITaxRepository taxRepository, IRealTimeNotifier notifier)
+    {
+        _taxRepository = taxRepository;
+        _notifier = notifier;
+    }
 
     public async Task<Result<TaxRecords.TaxResponse>> AddTaxAsync(TaxRecords.AddTaxRequest request)
     {
@@ -21,6 +28,8 @@ public class TaxCommandService : ITaxCommandService
 
         var tax = new Tax { NameAr = request.NameAr, NameEn = request.NameEn, Amount = request.Amount, TaxType = request.TaxType, TaxScope = request.TaxScope, IsActive = request.IsActive };
         await _taxRepository.AddTaxAsync(tax);
+
+        await _notifier.NotifyTaxesUpdatedAsync(); 
 
         return Result<TaxRecords.TaxResponse>.Success(new TaxRecords.TaxResponse(tax.TaxId, tax.NameAr, tax.NameEn, tax.Amount, tax.TaxType, tax.TaxScope, tax.IsActive));
     }
@@ -38,6 +47,9 @@ public class TaxCommandService : ITaxCommandService
         tax.IsActive = request.IsActive;
 
         await _taxRepository.UpdateTaxAsync(tax);
+
+        await _notifier.NotifyTaxesUpdatedAsync(); 
+
         return Result<TaxRecords.TaxResponse>.Success(new TaxRecords.TaxResponse(tax.TaxId, tax.NameAr, tax.NameEn, tax.Amount, tax.TaxType, tax.TaxScope, tax.IsActive));
     }
 
@@ -49,6 +61,8 @@ public class TaxCommandService : ITaxCommandService
         tax.IsDeleted = true;
         tax.IsActive = false;
         await _taxRepository.UpdateTaxAsync(tax);
+
+        await _notifier.NotifyTaxesUpdatedAsync(); 
 
         return Result<bool>.Success(true);
     }

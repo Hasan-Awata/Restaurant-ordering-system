@@ -20,5 +20,6 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveOrderRejected(int orderId, string message);
         public Task ReceiveSessionEnded(string message);
         public Task ReceiveBillRequested(string tableSessionId);
+        public Task ReceiveTaxesUpdated(string message);
     }
 }
