@@ -161,7 +161,7 @@ namespace OrderingSystem.Infrastructure.Queries
                         oi.UnitPrice,
                         oi.Notes
                     )).ToList()
-                ))
+                )) 
                 .ToListAsync();
 
             var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);

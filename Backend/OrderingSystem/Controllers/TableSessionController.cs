@@ -52,7 +52,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // ── CASHIER PATH: Approve the activation request ────────────────────────
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -85,7 +85,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // ── CASHIER PATH: Close session after payment ───────────────────────────
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpPost("end")]
         public async Task<IActionResult> EndTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -105,7 +105,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpPost("dismiss")]
         public async Task<IActionResult> DismissTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -113,7 +113,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpPost("dismiss-bill")]
         public async Task<IActionResult> DismissBill([FromBody] ActivateTableSessionRequest request)
         {
@@ -122,7 +122,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // 2. READ ENDPOINT (Query Path)
-        [Authorize(Roles = "Admin,Cashier")]
+      //  [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {

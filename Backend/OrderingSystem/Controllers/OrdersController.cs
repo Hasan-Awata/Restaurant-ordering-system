@@ -21,7 +21,7 @@ namespace OrderingSystem.WebApi.Controllers
             _orderQuery = orderQuery;
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+      //  [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
@@ -34,7 +34,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+      //  [Authorize(Roles = "Admin,Cashier")]
         [HttpPut("{id}/approve")]
         public async Task<IActionResult> ApproveOrder(int id)
         {
@@ -42,7 +42,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+       // [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}/cancel")]
         public async Task<IActionResult> CancelOrder(int id)
         {
@@ -50,7 +50,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}/customer-cancel")]
         public async Task<IActionResult> CustomerCancelOrder(int id)
         {
@@ -63,14 +63,14 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")] 
+        //[Authorize(Roles = "Admin,Cashier")] 
         [HttpGet("pending")]
         public async Task<IActionResult> GetPendingOrders([FromQuery] PageDTO page)
         {
             var result = await _orderQuery.GetPendingOrdersAsync(page);
             return HandleResult(result);
         }
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("historical-bills")]
         public async Task<IActionResult> GetHistoricalBills(
          [FromQuery] DateTime startDate,
