@@ -1,9 +1,12 @@
-﻿using OrderingSystem.Application.DTOs;
+﻿using Microsoft.Extensions.Caching.Memory;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Bills;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Interfaces.TaxesInterfaces;
 using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
@@ -17,20 +20,32 @@ namespace OrderingSystem.Application.Services
         private readonly IDeviceSessionRepository _deviceSessionRepository;
         private readonly ITableRepository _tableRepository;
         private readonly IOrderRepository _orderRepository;
+        private readonly ITaxRepository _taxRepository;
+        private readonly ITaxCalculationService _taxCalculationService;
+        private readonly IBillRepository _billRepository;
         private readonly IRealTimeNotifier _notifier;
+        private readonly IMemoryCache _cache; 
 
         public SessionCommandService(
             ITableSessionRepository tableSessionRepository,
             IDeviceSessionRepository deviceSessionRepository,
             ITableRepository tableRepository,
             IOrderRepository orderRepository,
-            IRealTimeNotifier notifier)
+            ITaxRepository taxRepository,
+            ITaxCalculationService taxCalculationService,
+            IBillRepository billRepository,
+            IRealTimeNotifier notifier,
+            IMemoryCache cache)
         {
             _tableSessionRepository = tableSessionRepository;
             _deviceSessionRepository = deviceSessionRepository;
             _tableRepository = tableRepository;
             _orderRepository = orderRepository;
+            _taxRepository = taxRepository;
+            _taxCalculationService = taxCalculationService;
+            _billRepository = billRepository;
             _notifier = notifier;
+            _cache = cache;
         }
 
         public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(string qrCode, Guid? deviceSessionId = null)
@@ -121,6 +136,12 @@ namespace OrderingSystem.Application.Services
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(activeSession, deviceSession));
         }
 
+        private void RevokeSessionInCache(Guid tableSessionId)
+        {
+            // Retain revocation flag for 4 hours to match JWT lifespan
+            _cache.Set($"revoked_table_session_{tableSessionId}", true, TimeSpan.FromHours(4));
+        }
+
         public async Task<Result<TableSessionResponse>> ActivateTableSessionAsync(ActivateTableSessionRequest request)
         {
             var session = await _tableSessionRepository.GetSessionByIdAsync(request.tableSessionId);
@@ -179,7 +200,6 @@ namespace OrderingSystem.Application.Services
             if (session == null)
                 return Result.Failure("No active table session was found.", enErrorType.NotFound);
 
-            // 1. Explicitly delete orders to safely bypass the ON DELETE RESTRICT database constraint
             if (session.Orders != null && session.Orders.Any())
             {
                 foreach (var order in session.Orders.ToList())
@@ -188,10 +208,8 @@ namespace OrderingSystem.Application.Services
                 }
             }
 
-            // 2. Hard delete the session (DeviceSessions will cascade automatically!)
             await _tableSessionRepository.DeleteSessionAsync(session);
 
-            // 3. Reset the Table Status back to Available
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
             if (table != null)
             {
@@ -199,7 +217,9 @@ namespace OrderingSystem.Application.Services
                 await _tableRepository.UpdateTableAsync(table);
             }
 
-            // Optional: Notify via SignalR that session is dropped
+            // Revoke stateless tokens for this session
+            RevokeSessionInCache(tableSessionId);
+
             return Result.Success();
         }
 
@@ -235,24 +255,63 @@ namespace OrderingSystem.Application.Services
             if (session == null)
                 return Result<SessionResponse>.Failure("No active table session was found.", enErrorType.NotFound);
 
-            // 1. Soft close the session
+            // 1. Filter out cancelled orders and flatten the items
+            var validOrders = session.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled).ToList();
+            var allOrderItems = validOrders.SelectMany(o => o.OrderItems).ToList();
+
+            // 2. Consolidate matching items for the final receipt
+            var consolidatedItems = allOrderItems
+                .GroupBy(oi => new { oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.UnitPrice })
+                .Select(g => new BillItem
+                {
+                    MenuItemId = g.Key.MenuItemId,
+                    NameEn = g.Key.NameEn,
+                    NameAr = g.Key.NameAr,
+                    UnitPrice = g.Key.UnitPrice,
+                    Quantity = g.Sum(oi => oi.Quantity),
+                    TotalPrice = g.Key.UnitPrice * g.Sum(oi => oi.Quantity)
+                }).ToList();
+
+            // 3. Perform Tax Calculations using your existing service
+            decimal totalSubTotal = consolidatedItems.Sum(i => i.TotalPrice);
+            int totalItemsCount = consolidatedItems.Sum(i => i.Quantity);
+            int uniqueGuestsCount = session.Devices.Count;
+
+            var activeTaxes = await _taxRepository.GetActiveTaxesAsync();
+            var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, uniqueGuestsCount, totalItemsCount, activeTaxes);
+
+            // 4. Create the Immutable Snapshot (The Bill)
+            var finalBill = new Bill
+            {
+                TableSessionId = session.TableSessionId,
+                TotalSubTotal = totalSubTotal,
+                TotalTax = taxResult.TotalTaxAmount,
+                GrandTotal = totalSubTotal + taxResult.TotalTaxAmount,
+                CreatedAt = DateTime.UtcNow,
+                BillItems = consolidatedItems,
+                BillTaxes = taxResult.AppliedTaxes.Select(t => new BillTax
+                {
+                    TaxNameEn = t.NameEn,
+                    TaxNameAr = t.NameAr,
+                    AppliedAmount = t.Amount
+                }).ToList()
+            };
+
+            // Save the bill snapshot to the database
+            await _billRepository.AddBillAsync(finalBill);
+
+            // 5. Proceed with closing the session (Your existing logic)
             session.Status = enSessionStatus.Closed;
             session.ClosedAt = DateTime.UtcNow;
 
-            // 2. Flag all active orders as Served (excluding already cancelled ones)
-            if (session.Orders != null && session.Orders.Any())
+            foreach (var order in validOrders)
             {
-                foreach (var order in session.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled))
-                {
-                    order.OrderStatus = enOrderStatus.Served;
-                    await _orderRepository.UpdateOrderAsync(order);
-                }
+                order.OrderStatus = enOrderStatus.Served;
+                await _orderRepository.UpdateOrderAsync(order);
             }
 
-            // 3. Save the session status
             await _tableSessionRepository.UpdateSessionAsync(session);
 
-            // 4. Reset the Table Status back to Available for the next customer
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
             if (table != null)
             {
@@ -260,7 +319,7 @@ namespace OrderingSystem.Application.Services
                 await _tableRepository.UpdateTableAsync(table);
             }
 
-            // 5. Notify clients via SignalR to show the "Thank You" or "Receipt" screen
+            RevokeSessionInCache(tableSessionId);
             await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
@@ -287,6 +346,9 @@ namespace OrderingSystem.Application.Services
             session.Status = enSessionStatus.Closed;
             session.ClosedAt = DateTime.UtcNow;
             await _tableSessionRepository.UpdateSessionAsync(session);
+
+            // Revoke stateless tokens for this session
+            RevokeSessionInCache(tableSessionId);
 
             return Result.Success();
         }

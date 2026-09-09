@@ -29,6 +29,7 @@ namespace OrderingSystem.Infrastructure.Repositories
         {
             return await _context.TableSessions
             .Include(s => s.Orders)
+                .ThenInclude(o => o.OrderItems).ThenInclude(oi => oi.MenuItem)
             .Include(s => s.Devices)
             .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId && s.ClosedAt == null);
         }

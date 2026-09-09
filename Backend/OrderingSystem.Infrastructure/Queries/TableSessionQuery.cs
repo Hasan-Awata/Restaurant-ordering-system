@@ -48,7 +48,6 @@ namespace OrderingSystem.Infrastructure.Queries
 
             if (session == null) return null;
 
-            // جلب الضرائب الفعالة
             var activeTaxes = await _context.Taxes
                 .AsNoTracking()
                 .Where(t => t.IsActive && !t.IsDeleted)
@@ -104,7 +103,6 @@ namespace OrderingSystem.Infrastructure.Queries
         }
         public async Task<SessionPollingResponse?> GetSessionPollingStatusAsync(Guid tableSessionId, Guid deviceSessionId)
         {
-            // استعلام خفيف جداً ومثالي للـ Polling
             return await _context.SessionDevices
                 .AsNoTracking()
                 .Where(d => d.DeviceSessionId == deviceSessionId && d.TableSessionId == tableSessionId)

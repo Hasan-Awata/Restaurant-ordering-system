@@ -11,5 +11,6 @@ namespace OrderingSystem.Application.Interfaces.TaxesInterfaces
         Task UpdateTaxAsync(Tax tax);
         Task<Tax?> GetTaxByIdAsync(int taxId);
         Task<bool> TaxExistsByNameAsync(string nameEn, string nameAr);
+        Task<IEnumerable<Tax>> GetActiveTaxesAsync();
     }
 }

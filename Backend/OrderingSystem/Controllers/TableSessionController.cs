@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.WebApi.Controllers.Base;
 
@@ -26,13 +27,11 @@ namespace OrderingSystem.WebApi.Controllers
 
         // ── CUSTOMER PATH: Scan the QR code ─────────────────────────────────────
         [HttpPost("qr")]
-        [DisableRateLimiting] // Whitelist this endpoint from the global rate limiting policy
+        [DisableRateLimiting]
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
-            // Use the secure cookie value extracted by the BaseController
             var result = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, CurrentDeviceSessionId);
 
-            // If successful, set/refresh the secure cookie
             if (result.IsSuccess && result.Value?.DeviceSession != null)
             {
                 var cookieOptions = new CookieOptions
@@ -43,11 +42,21 @@ namespace OrderingSystem.WebApi.Controllers
                     Expires = DateTime.UtcNow.AddHours(4)
                 };
 
+                // 1. Maintain original behavior for backward compatibility
                 Response.Cookies.Append(
                     "DeviceSessionId",
                     result.Value.DeviceSession.DeviceSessionId.ToString(),
                     cookieOptions
                 );
+
+                // 2. Generate and append the stateless context token
+                var jwtProvider = HttpContext.RequestServices.GetRequiredService<IJwtProvider>();
+                var signalRToken = jwtProvider.GenerateCustomerSignalRToken(
+                    result.Value.DeviceSession.DeviceSessionId,
+                    result.Value.TableSession.TableSessionId
+                );
+
+                Response.Cookies.Append("SignalRContext", signalRToken, cookieOptions);
             }
 
             return HandleResult(result);

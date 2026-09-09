@@ -21,7 +21,7 @@ namespace OrderingSystem.Application.DTOs
 
 
         public record HistoricalBillResponse(
-            string OrderId,
+            int OrderId,
             int TableNumber,
             string TableSessionId,
             string Status,

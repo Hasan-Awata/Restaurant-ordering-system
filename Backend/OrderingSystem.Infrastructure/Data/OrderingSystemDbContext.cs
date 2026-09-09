@@ -20,6 +20,9 @@ namespace OrderingSystem.Infrastructure.Data
         public DbSet<Order> Orders { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }
         public DbSet<Tax> Taxes { get; set; }
+        public DbSet<Bill> Bills { get; set; }
+        public DbSet<BillItem> BillItems { get; set; }
+        public DbSet<BillTax> BillTaxes { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -190,6 +193,30 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.IsDeleted).IsRequired();
                 entity.HasQueryFilter(e => !e.IsDeleted);
                 entity.ToTable(t => t.HasCheckConstraint("CK_Tax_Amount_NonNegative", "\"Amount\" >= 0"));
+            });
+
+            modelBuilder.Entity<Bill>(entity => {
+                entity.HasKey(e => e.BillId);
+                entity.Property(e => e.TotalSubTotal).HasPrecision(18, 2);
+                entity.Property(e => e.TotalTax).HasPrecision(18, 2);
+                entity.Property(e => e.GrandTotal).HasPrecision(18, 2);
+                entity.HasOne(e => e.TableSession).WithOne(ts => ts.FinalBill)
+                      .HasForeignKey<Bill>(e => e.TableSessionId).OnDelete(DeleteBehavior.Restrict);
+            });
+
+            modelBuilder.Entity<BillItem>(entity => {
+                entity.HasKey(e => e.BillItemId);
+                entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
+                entity.Property(e => e.TotalPrice).HasPrecision(18, 2);
+                entity.HasOne(e => e.Bill).WithMany(b => b.BillItems)
+                      .HasForeignKey(e => e.BillId).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<BillTax>(entity => {
+                entity.HasKey(e => e.BillTaxId);
+                entity.Property(e => e.AppliedAmount).HasPrecision(18, 2);
+                entity.HasOne(e => e.Bill).WithMany(b => b.BillTaxes)
+                      .HasForeignKey(e => e.BillId).OnDelete(DeleteBehavior.Cascade);
             });
         }
     }

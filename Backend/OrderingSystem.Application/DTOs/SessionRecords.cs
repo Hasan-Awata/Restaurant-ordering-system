@@ -21,7 +21,7 @@ namespace OrderingSystem.Application.DTOs
     public record TableSessionResponse(Guid TableSessionId, int TableNumber, enSessionStatus Status, DateTime CreatedAt);
     public record SessionResponse(TableSessionResponse TableSession, DeviceSessionResponse? DeviceSession);
     public record BillItemResponse(int MenuItemId, string NameEn, string NameAr, int Quantity, decimal UnitPrice, decimal TotalPrice);
-    public record GuestBillResponse(Guid DeviceSessionId, enDeviceRole Role, List<BillItemResponse> Items, decimal SubTotal);
+    public record GuestBillResponse(Guid DeviceSessionId, enDeviceRole Role, List<BillItemResponse> Items, decimal SubTotal, decimal TaxAmount = 0m, decimal GrandTotal = 0m);
     public record BillSummaryResponse(
         Guid TableSessionId,
         List<GuestBillResponse> GuestBills,

@@ -27,5 +27,12 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task<bool> TaxExistsByNameAsync(string nameEn, string nameAr) =>
             await _context.Taxes.AnyAsync(t => t.NameEn.ToLower() == nameEn.ToLower() || t.NameAr.ToLower() == nameAr.ToLower());
+
+        public async Task<IEnumerable<Tax>> GetActiveTaxesAsync()
+        {
+            return await _context.Taxes
+                .Where(t => t.IsActive && !t.IsDeleted)
+                .ToListAsync();
+        }
     }
 }

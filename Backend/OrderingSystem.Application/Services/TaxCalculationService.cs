@@ -49,5 +49,26 @@ namespace OrderingSystem.Application.Services
 
             return (appliedTaxes, totalTaxAmount);
         }
+
+        public decimal CalculateGuestTaxAmount(decimal guestSubTotal, int guestItemsCount, int totalGuestsCount, IEnumerable<Tax> activeTaxes)
+        {
+            decimal guestTaxAmount = 0m;
+            var guestCount = totalGuestsCount > 0 ? totalGuestsCount : 1;
+
+            foreach (var tax in activeTaxes)
+            {
+                decimal taxAmount = 0m;
+                if (tax.TaxType == enTaxType.Percentage && tax.TaxScope == enTaxScope.PerBill)
+                    taxAmount = guestSubTotal * (tax.Amount / 100m); // % of THEIR subtotal
+                else if (tax.TaxType == enTaxType.FlatRate)
+                {
+                    if (tax.TaxScope == enTaxScope.PerBill) taxAmount = tax.Amount / guestCount; // Split flat bill fee
+                    else if (tax.TaxScope == enTaxScope.PerGuest) taxAmount = tax.Amount; // Their guest fee
+                    else if (tax.TaxScope == enTaxScope.PerItem) taxAmount = tax.Amount * guestItemsCount; // Their items
+                }
+                guestTaxAmount += Math.Round(taxAmount, 2);
+            }
+            return guestTaxAmount;
+        }
     }
 }

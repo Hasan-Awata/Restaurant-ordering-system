@@ -168,89 +168,41 @@ namespace OrderingSystem.Infrastructure.Queries
             return Result<PagedResponse<OrderRecords.OrderResponse>>.Success(pagedResponse);
         }
 
-        public async Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(
-                DateTime startDate, DateTime endDate, PageDTO page)
+        public async Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(DateTime startDate, DateTime endDate, PageDTO page)
         {
-            var activeTaxes = await _context.Taxes
-                .AsNoTracking()
-                .Where(t => t.IsActive && !t.IsDeleted)
-                .ToListAsync();
+            var query = _context.Bills
+                .Include(b => b.TableSession)
+                    .ThenInclude(ts => ts.Table)
+                .Include(b => b.BillItems)
+                .Include(b => b.BillTaxes)
+                .Where(b => b.CreatedAt >= startDate && b.CreatedAt <= endDate)
+                .OrderByDescending(b => b.CreatedAt);
 
-            var sessionQuery = _context.Orders
-                .AsNoTracking()
-                .Where(o => o.CreatedAt >= startDate && o.CreatedAt <= endDate) 
-                .GroupBy(o => o.TableSessionId)
-                .Select(g => new
-                {
-                    SessionId = g.Key,
-                    LastOrderDate = g.Max(o => o.CreatedAt)
-                });
-
-            var totalRecords = await sessionQuery.CountAsync();
-
-            var pagedSessions = await sessionQuery
-                .OrderByDescending(x => x.LastOrderDate)
+            var totalRecords = await query.CountAsync();
+            var bills = await query
                 .Skip((page.PageNumber - 1) * page.PageSize)
                 .Take(page.PageSize)
                 .ToListAsync();
 
-            var sessionIds = pagedSessions.Select(s => s.SessionId).ToList();
+            var responseData = bills.Select(b => new HistoricalBillResponse(
+                OrderId: b.BillId, 
+                TableNumber: b.TableSession.Table.TableNumber,
+                TableSessionId: b.TableSessionId.ToString(),
+                Status: "Closed",
+                CreatedAt: b.CreatedAt,
+                TotalSubTotal: b.TotalSubTotal,
+                GrandTotal: b.GrandTotal,
+                Items: b.BillItems.Select(bi => new OrderRecords.BillItemResponse(
+                    bi.MenuItemId, bi.NameAr, bi.NameEn, bi.Quantity, bi.UnitPrice, bi.TotalPrice
+                )).ToList(),
+                AppliedTaxes: b.BillTaxes.Select(bt => new AppliedTaxResponse(
+                    bt.TaxNameEn, bt.TaxNameAr, bt.AppliedAmount
+                )).ToList()
+            )).ToList();
 
-            var ordersForSessions = await _context.Orders
-                .AsNoTracking()
-                .Include(o => o.OrderItems)
-                    .ThenInclude(oi => oi.MenuItem)
-                .Include(o => o.Session)
-                    .ThenInclude(s => s.Table)
-                .Where(o => sessionIds.Contains(o.TableSessionId))
-                .ToListAsync();
-
-            var items = ordersForSessions
-                        .GroupBy(o => o.TableSessionId)
-                        .Select(g =>
-                        {
-                            var firstOrder = g.OrderBy(o => o.CreatedAt).First();
-                            var lastOrder = g.OrderByDescending(o => o.CreatedAt).First();
-
-                            var groupedItems = g.SelectMany(o => o.OrderItems)
-                                .GroupBy(oi => oi.MenuItemId)
-                                .Select(itemGroup =>
-                                {
-                                    var firstItem = itemGroup.First();
-                                    var totalQuantity = itemGroup.Sum(i => i.Quantity);
-
-                                    return new OrderRecords.BillItemResponse(
-                                        firstItem.MenuItemId,
-                                        firstItem.MenuItem != null ? firstItem.MenuItem.NameAr : "Deleted Item",
-                                        firstItem.MenuItem != null ? firstItem.MenuItem.NameEn : "Deleted Item",
-                                        totalQuantity,
-                                        firstItem.UnitPrice,
-                                        totalQuantity * firstItem.UnitPrice
-                                    );
-                                }).ToList();
-
-                            decimal subTotal = g.Sum(o => o.TotalAmount);
-                            var uniqueGuests = g.Select(o => o.DeviceSessionId).Distinct().Count();
-                            var totalItemsCount = groupedItems.Sum(i => i.Quantity);
-
-                            var taxResult = _taxCalculationService.CalculateTaxes(subTotal, uniqueGuests, totalItemsCount, activeTaxes);
-                            var grandTotal = subTotal + taxResult.TotalTaxAmount;
-
-                            return new HistoricalBillResponse(
-                                firstOrder.OrderId.ToString(),
-                                firstOrder.Session.Table.TableNumber,
-                                firstOrder.TableSessionId.ToString(),
-                                firstOrder.OrderStatus.ToString(),
-                                lastOrder.CreatedAt,
-                                subTotal,
-                                grandTotal, 
-                                groupedItems,
-                                taxResult.AppliedTaxes 
-                            );
-                        }).ToList();
-
-            var pagedResponse = new PagedResponse<HistoricalBillResponse>(items, totalRecords, page.PageNumber, page.PageSize);
-            return Result<PagedResponse<HistoricalBillResponse>>.Success(pagedResponse);
+            return Result<PagedResponse<HistoricalBillResponse>>.Success(
+                new PagedResponse<HistoricalBillResponse>(responseData, totalRecords, page.PageNumber, page.PageSize)
+            );
         }
     }
 }

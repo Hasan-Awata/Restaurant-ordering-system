@@ -8,6 +8,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OrderingSystem.Application.Interfaces.Auth;
 using OrderingSystem.Application.Interfaces.Authentication;
+using OrderingSystem.Application.Interfaces.Bills;
 using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem; 
 using OrderingSystem.Application.Interfaces.Notifications;
@@ -177,6 +178,7 @@ builder.Services.AddScoped<ITaxRepository, TaxRepository>();
 builder.Services.AddScoped<ITaxCommandService, TaxCommandService>();
 builder.Services.AddScoped<ITaxQuery, TaxQuery>();
 builder.Services.AddScoped<ITaxCalculationService, TaxCalculationService>();
+builder.Services.AddScoped<IBillRepository, BillRepository>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -196,22 +198,28 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         ValidIssuer = jwtSettings["Issuer"],
         ValidAudience = jwtSettings["Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(
-        Encoding.UTF8.GetBytes(secretKey))
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
     };
 
     options.Events = new JwtBearerEvents
     {
         OnMessageReceived = context =>
         {
-            var accessToken = context.Request.Query["access_token"];
             var path = context.HttpContext.Request.Path;
 
-            // If the request is for our SignalR hub and contains a token in the query
-            if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+            if (path.StartsWithSegments("/hubs"))
             {
-                // Tell the middleware to use this token for authentication
-                context.Token = accessToken;
+                // 1. Staff query string extraction
+                var accessToken = context.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(accessToken))
+                {
+                    context.Token = accessToken;
+                }
+                // 2. Customer cookie extraction
+                else if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
+                {
+                    context.Token = cookieToken;
+                }
             }
 
             return Task.CompletedTask;
@@ -222,10 +230,20 @@ builder.Services.AddAuthentication(options =>
             var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
             var tokenString = context.SecurityToken is JwtSecurityToken jwt ? jwt.RawData : string.Empty;
 
-            // If the token is found in the cache, it's revoked. Reject the request.
+            // Check if individual token was logged out
             if (!string.IsNullOrEmpty(tokenString) && cache.TryGetValue($"blacklist_{tokenString}", out _))
             {
                 context.Fail("This token has been revoked.");
+                return Task.CompletedTask;
+            }
+
+            // Check if customer's table session has been closed
+            var tableSessionIdClaim = context.Principal?.FindFirst("TableSessionId")?.Value;
+            if (!string.IsNullOrEmpty(tableSessionIdClaim) &&
+                cache.TryGetValue($"revoked_table_session_{tableSessionIdClaim}", out _))
+            {
+                context.Fail("This table session has ended.");
+                return Task.CompletedTask;
             }
 
             return Task.CompletedTask;
