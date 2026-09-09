@@ -10,6 +10,7 @@ namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/tables")]
+    [Authorize(Policy = "RequireStaff")]
     public class TablesController : ControllerBase
     {
         private readonly ITableCommandService _tableCommandService;
@@ -21,11 +22,6 @@ namespace OrderingSystem.WebApi.Controllers
             _tableQueryService = tableQueryService;
         }
 
-        // ==========================================
-        // الكود القديم الخاص بك (لم يتم تغييره)
-        // ==========================================
-
-    //    [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> AddTable([FromBody] AddTableRequest request)
         {
@@ -38,7 +34,6 @@ namespace OrderingSystem.WebApi.Controllers
             return CreatedAtAction(nameof(GetTableById), new { tableId = result.Value!.TableId }, result.Value);
         }
 
-  //      [Authorize(Roles = "Admin,Cashier")]
         [HttpPut]
         public async Task<IActionResult> UpdateTable([FromBody] UpdateTableRequest request)
         {
@@ -52,7 +47,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result.Value);
         }
 
-       // [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{tableId}")]
         public async Task<IActionResult> DeleteTable(int tableId)
         {
@@ -66,7 +60,6 @@ namespace OrderingSystem.WebApi.Controllers
             return NoContent();
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{tableId}/qrcode")]
         public async Task<IActionResult> GetQrCode(int tableId)
         {
@@ -78,7 +71,6 @@ namespace OrderingSystem.WebApi.Controllers
 
 
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{tableId}")]
         public async Task<IActionResult> GetTableById(int tableId)
         {
@@ -88,7 +80,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("floor/{floorNumber}/number/{tableNumber}")]
         public async Task<IActionResult> GetTableByNumber(int tableNumber, int floorNumber)
         {
@@ -98,7 +89,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("floor/{floorNumber}")]
         public async Task<IActionResult> GetAllTablesByFloor([FromQuery] PageDTO page, int floorNumber)
         {
@@ -106,7 +96,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet]
         public async Task<IActionResult> GetAllTables([FromQuery] PageDTO page)
         {
@@ -114,7 +103,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("status/{tableStatus}")]
         public async Task<IActionResult> GetAllTablesByStatus([FromQuery] PageDTO page, enTableStatus tableStatus)
         {
@@ -122,7 +110,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("pending-activation")]
         public async Task<IActionResult> GetAllPendingActivationTables([FromQuery] PageDTO page)
         {
@@ -130,7 +117,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-//        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("billing")]
         public async Task<IActionResult> GetAllBillingTables([FromQuery] PageDTO page)
         {

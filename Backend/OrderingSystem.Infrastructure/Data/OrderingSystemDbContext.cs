@@ -61,7 +61,11 @@ namespace OrderingSystem.Infrastructure.Data
                       .OnDelete(DeleteBehavior.Restrict);
 
                 entity.HasQueryFilter(e => !e.IsDeleted);
-            });
+
+                entity.HasIndex(t => new { t.TableNumber, t.FloorNumber })
+                      .IsUnique()
+                      .HasFilter("\"IsDeleted\" = false");
+        });
 
             // 3. TableSessions
             modelBuilder.Entity<TableSession>(entity =>
@@ -77,8 +81,9 @@ namespace OrderingSystem.Infrastructure.Data
                       .HasForeignKey(e => e.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
 
-                entity.HasIndex(s => new { s.TableId, s.ClosedAt })
-                      .HasFilter(@"""ClosedAt"" IS NULL"); 
+                entity.HasIndex(s => new { s.TableId, s.ClosedAt }, "IX_TableSessions_TableId")
+                      .HasFilter(@"""ClosedAt"" IS NULL")
+                      .IsUnique();
             });
 
             // 4. Categories
@@ -149,6 +154,7 @@ namespace OrderingSystem.Infrastructure.Data
 
                 entity.HasIndex(o => new { o.OrderStatus, o.CreatedAt });
 
+                entity.ToTable(t => t.HasCheckConstraint("CK_Order_TotalAmount_NonNegative", "\"TotalAmount\" >= 0"));
             });
 
             // 8. OrderItems
@@ -167,6 +173,12 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(m => m.OrderItems)
                       .HasForeignKey(e => e.MenuItemId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.ToTable(t =>
+                {
+                    t.HasCheckConstraint("CK_OrderItem_Quantity_Positive", "\"Quantity\" > 0");
+                    t.HasCheckConstraint("CK_OrderItem_UnitPrice_NonNegative", "\"UnitPrice\" >= 0");
+                });
             });
 
             modelBuilder.Entity<Tax>(entity =>
@@ -177,6 +189,7 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.Amount).HasPrecision(18, 2).IsRequired();
                 entity.Property(e => e.IsDeleted).IsRequired();
                 entity.HasQueryFilter(e => !e.IsDeleted);
+                entity.ToTable(t => t.HasCheckConstraint("CK_Tax_Amount_NonNegative", "\"Amount\" >= 0"));
             });
         }
     }

@@ -111,6 +111,7 @@ using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Interfaces.TaxesInterfaces;
 using OrderingSystem.Application.Services;
+using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Authentication;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Infrastructure.ExternalServices.Notifications;
@@ -152,19 +153,37 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 builder.Services.AddRateLimiter(options =>
 {
-    options.AddPolicy("Fixed", httpContext =>
-    {
-        var partitionKey = httpContext.Request.Cookies["DeviceSessionId"] ??
-                           httpContext.Connection.RemoteIpAddress?.ToString() ??
-                           httpContext.TraceIdentifier; 
+    // Return a standard 429 status code when limits are hit
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-        return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ =>
+    options.AddPolicy("DynamicRestaurantPolicy", httpContext =>
+    {
+        // 1. Check if the user is already authenticated via device session
+        var hasDeviceSession = httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var sessionId);
+
+        if (hasDeviceSession && !string.IsNullOrWhiteSpace(sessionId))
+        {
+            // Authenticated Device: Standard limit per individual device
+            return RateLimitPartition.GetFixedWindowLimiter(sessionId, _ =>
+                new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 150, 
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 10 // Increased queue to absorb brief network reconnects
+                });
+        }
+
+        // 2. Anonymous Request: IP-based partition (Shared Restaurant Wi-Fi)
+        var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? httpContext.TraceIdentifier;
+
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ =>
             new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 100,
+                PermitLimit = 1000, // Massive threshold to account for NAT/Shared Wi-Fi
                 Window = TimeSpan.FromMinutes(1),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 2
+                QueueLimit = 50 // Large queue to prevent dropping legitimate new connections
             });
     });
 });
@@ -293,7 +312,19 @@ builder.Services.AddAuthentication(options =>
         }
     };
 });
-builder.Services.AddAuthorization();
+
+builder.Services.AddAuthorization(options =>
+{
+    // Strict access for Managers/Owners
+    options.AddPolicy("AdminOnly", policy =>
+        policy.RequireRole(enRoleType.Admin.ToString()));
+
+    // Operational access for Front-of-House
+    options.AddPolicy("RequireStaff", policy =>
+        policy.RequireRole(
+            enRoleType.Admin.ToString(),
+            enRoleType.Cashier.ToString())); 
+});
 
 // ── Adding CORS policy ────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
@@ -344,7 +375,7 @@ else
 
 app.UseAuthentication();
 app.UseAuthorization();
-app.MapControllers().RequireRateLimiting("Fixed");
+app.MapControllers().RequireRateLimiting("DynamicRestaurantPolicy"); 
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 app.MapHealthChecks("/api/health");
 
@@ -385,8 +416,9 @@ using System.Threading.Tasks;
 
 namespace OrderingSystem.Controllers
 {
-    [Route("api/Admin")]
     [ApiController]
+    [Route("api/Admin")]
+    [Authorize(Policy = "RequireStaff")]
     public class AdminController : BaseController
     {
         private readonly IOrderQuery _orderQuery;
@@ -398,7 +430,6 @@ namespace OrderingSystem.Controllers
             _tableQuery = tableQuery;
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("top-three-today")]
         public async Task<IActionResult> GetTopThreeItemsToday()
         {
@@ -406,7 +437,6 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("pending-count-orders")]
         public async Task<IActionResult> GetCountOfPendingOrders()
         {
@@ -414,7 +444,6 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-orders")]
         public async Task<IActionResult> GetCountOfOrders()
         {
@@ -422,7 +451,6 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-table")]
         public async Task<IActionResult> GetCountOfTaple()
         {
@@ -430,7 +458,6 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("historical-bills")] 
         public async Task<IActionResult> GetHistoricalBills(
             [FromQuery] DateTime startDate,
@@ -467,7 +494,7 @@ namespace OrderingSystem.WebApi.Controllers
             _authCommandService = authCommandService;
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
@@ -475,12 +502,12 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "AdminOnly")] 
         [HttpPost("register")]
         public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
         {
             var result = await _authCommandService.CreateUserAsync(request);
-
+             
             return HandleResult(result);
         }
         
@@ -491,7 +518,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+       //[Authorize(Roles = "Admin,Cashier")]
 
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
@@ -674,7 +701,7 @@ namespace OrderingSystem.WebApi.Controllers
             _categoryQueryService = categoryQueryService;
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpPost]
         public async Task<IActionResult> AddCategory([FromBody] CategoriesRecords.AddCategoryRequest request)
         {
@@ -687,7 +714,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpPut]
         public async Task<IActionResult> UpdateCategory([FromBody] CategoriesRecords.UpdateCategoryRequest request)
         {
@@ -695,21 +722,21 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpDelete]
         public async Task<IActionResult> DeleteCategory([FromBody] CategoriesRecords.DeleteCategoryRequest request)
         {
             var result = await _categoryCommandService.DeleteCategoryAsync(request);
             return HandleResult(result);
         }
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetCategoryById(int id)
         {
             var result = await _categoryQueryService.GetCategoryByIdAsync(id);
             return HandleResult(result);
         }
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetCategory(int id)
         {
@@ -717,7 +744,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet]
         public async Task<IActionResult> GetAllCategories([FromQuery] PageDTO page)
         {
@@ -725,7 +752,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableCategories([FromQuery] PageDTO page)
         {
@@ -763,7 +790,7 @@ namespace OrderingSystem.WebApi.Controllers
             _menuItemQueryService = menuItemQueryService;
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpPost]
         public async Task<IActionResult> AddMenuItem([FromBody] MenuRecords.AddMenuItemRequest request)
         {
@@ -776,7 +803,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpPut]
         public async Task<IActionResult> UpdateMenuItem([FromBody] MenuRecords.UpdateMenuItemRequest request)
         {
@@ -784,47 +811,47 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpDelete]
         public async Task<IActionResult> DeleteMenuItem([FromBody] MenuRecords.DeleteMenuItemRequest request)
         {
             var result = await _menuItemCommandService.DeleteMenuItemAsync(request);
             return HandleResult(result);
         }
-        [Authorize(Roles = "Admin,Cashier")]
 
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetItemById(int id)
         {
             var result = await _menuItemQueryService.GetItemByIdAsync(id);
             return HandleResult(result);
         }
-        [Authorize(Roles = "Admin,Cashier")]
-
+        
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetMenuItem(int id)
         {
             var result = await _menuItemQueryService.GetMenuItemAsync(id);
             return HandleResult(result);
         }
-        [Authorize(Roles = "Admin,Cashier")]
-
+       
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet]
         public async Task<IActionResult> GetAllMenuItems([FromQuery] PageDTO page)
         {
             var result = await _menuItemQueryService.GetAllMenuItemsAsync(page);
             return HandleResult(result);
         }
-        [Authorize(Roles = "Admin,Cashier")]
-
+        
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("category/{categoryId}")]
         public async Task<IActionResult> GetAllMenuItemsByCategory(int categoryId, [FromQuery] PageDTO page)
         {
             var result = await _menuItemQueryService.GetAllMenuItemsByCategoryAsync(categoryId, page);
             return HandleResult(result);
         }
-        [Authorize(Roles = "Admin,Cashier")]
-
+        
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableMenuItems([FromQuery] PageDTO page)
         {
@@ -832,8 +859,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
-
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("search")]
         public async Task<IActionResult> SearchMenuItems([FromQuery] string query, [FromQuery] PageDTO page)
         {
@@ -858,6 +884,7 @@ namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/orders")]
+    [Authorize(Policy = "RequireStaff")]
     public class OrdersController : BaseController
     {
         private readonly IOrderCommandService _orderCommandService;
@@ -869,7 +896,6 @@ namespace OrderingSystem.WebApi.Controllers
             _orderQuery = orderQuery;
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
@@ -882,7 +908,6 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpPut("{id}/approve")]
         public async Task<IActionResult> ApproveOrder(int id)
         {
@@ -890,7 +915,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}/cancel")]
         public async Task<IActionResult> CancelOrder(int id)
         {
@@ -898,7 +922,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}/customer-cancel")]
         public async Task<IActionResult> CustomerCancelOrder(int id)
         {
@@ -911,14 +934,12 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")] 
         [HttpGet("pending")]
         public async Task<IActionResult> GetPendingOrders([FromQuery] PageDTO page)
         {
             var result = await _orderQuery.GetPendingOrdersAsync(page);
             return HandleResult(result);
         }
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("historical-bills")]
         public async Task<IActionResult> GetHistoricalBills(
          [FromQuery] DateTime startDate,
@@ -947,6 +968,7 @@ namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/tables")]
+    [Authorize(Policy = "RequireStaff")]
     public class TablesController : ControllerBase
     {
         private readonly ITableCommandService _tableCommandService;
@@ -958,11 +980,6 @@ namespace OrderingSystem.WebApi.Controllers
             _tableQueryService = tableQueryService;
         }
 
-        // ==========================================
-        // الكود القديم الخاص بك (لم يتم تغييره)
-        // ==========================================
-
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpPost]
         public async Task<IActionResult> AddTable([FromBody] AddTableRequest request)
         {
@@ -975,7 +992,6 @@ namespace OrderingSystem.WebApi.Controllers
             return CreatedAtAction(nameof(GetTableById), new { tableId = result.Value!.TableId }, result.Value);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpPut]
         public async Task<IActionResult> UpdateTable([FromBody] UpdateTableRequest request)
         {
@@ -989,7 +1005,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result.Value);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{tableId}")]
         public async Task<IActionResult> DeleteTable(int tableId)
         {
@@ -1003,7 +1018,6 @@ namespace OrderingSystem.WebApi.Controllers
             return NoContent();
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{tableId}/qrcode")]
         public async Task<IActionResult> GetQrCode(int tableId)
         {
@@ -1015,7 +1029,6 @@ namespace OrderingSystem.WebApi.Controllers
 
 
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{tableId}")]
         public async Task<IActionResult> GetTableById(int tableId)
         {
@@ -1025,7 +1038,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("floor/{floorNumber}/number/{tableNumber}")]
         public async Task<IActionResult> GetTableByNumber(int tableNumber, int floorNumber)
         {
@@ -1035,7 +1047,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("floor/{floorNumber}")]
         public async Task<IActionResult> GetAllTablesByFloor([FromQuery] PageDTO page, int floorNumber)
         {
@@ -1043,7 +1054,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet]
         public async Task<IActionResult> GetAllTables([FromQuery] PageDTO page)
         {
@@ -1051,7 +1061,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("status/{tableStatus}")]
         public async Task<IActionResult> GetAllTablesByStatus([FromQuery] PageDTO page, enTableStatus tableStatus)
         {
@@ -1059,7 +1068,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("pending-activation")]
         public async Task<IActionResult> GetAllPendingActivationTables([FromQuery] PageDTO page)
         {
@@ -1067,7 +1075,6 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("billing")]
         public async Task<IActionResult> GetAllBillingTables([FromQuery] PageDTO page)
         {
@@ -1080,10 +1087,11 @@ namespace OrderingSystem.WebApi.Controllers
 
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem\Controllers\TableSessionController.cs
 ----------------------------------------
-﻿using Microsoft.AspNetCore.Mvc;
-using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using OrderingSystem.Application.DTOs;
-using Microsoft.AspNetCore.Authorization;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.WebApi.Controllers.Base;
 
 namespace OrderingSystem.WebApi.Controllers
@@ -1107,6 +1115,7 @@ namespace OrderingSystem.WebApi.Controllers
 
         // ── CUSTOMER PATH: Scan the QR code ─────────────────────────────────────
         [HttpPost("qr")]
+        [DisableRateLimiting] // Whitelist this endpoint from the global rate limiting policy
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
             // Use the secure cookie value extracted by the BaseController
@@ -1134,7 +1143,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // ── CASHIER PATH: Approve the activation request ────────────────────────
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Roles = "RequireStaff")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -1167,7 +1176,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // ── CASHIER PATH: Close session after payment ───────────────────────────
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpPost("end")]
         public async Task<IActionResult> EndTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -1187,7 +1196,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpPost("dismiss")]
         public async Task<IActionResult> DismissTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -1195,7 +1204,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpPost("dismiss-bill")]
         public async Task<IActionResult> DismissBill([FromBody] ActivateTableSessionRequest request)
         {
@@ -1204,7 +1213,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // 2. READ ENDPOINT (Query Path)
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {
@@ -1249,7 +1258,7 @@ namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/taxes")]
-    [Authorize(Roles = "Admin")] 
+    [Authorize(Policy = "AdminOnly")]
     public class TaxesController : BaseController
     {
         private readonly ITaxCommandService _taxCommandService;
@@ -1260,7 +1269,7 @@ namespace OrderingSystem.WebApi.Controllers
             _taxCommandService = taxCommandService;
             _taxQuery = taxQuery;
         }
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
 
         [HttpPost]
         public async Task<IActionResult> AddTax([FromBody] TaxRecords.AddTaxRequest request)
@@ -1268,7 +1277,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _taxCommandService.AddTaxAsync(request);
             return HandleCreatedResult(result, nameof(GetTaxById), new { id = result.Value?.TaxId });
         }
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
 
         [HttpPut]
         public async Task<IActionResult> UpdateTax([FromBody] TaxRecords.UpdateTaxRequest request)
@@ -1277,7 +1286,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteTax(int id)
         {
@@ -1285,7 +1294,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetTaxById(int id)
         {
@@ -1293,9 +1302,9 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
+        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet]
-        [AllowAnonymous] // Or change to [Authorize(Roles = "Admin,Cashier")] based on your needs
+      //  [AllowAnonymous] // Or change to [Authorize(Roles = "Admin,Cashier")] based on your needs
         public async Task<IActionResult> GetAllTaxes([FromQuery] PageDTO page)
         {
             var result = await _taxQuery.GetAllTaxesAsync(page);
@@ -2017,6 +2026,9 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyCustomerOfActivationDismissedAsync(Guid tableSessionId);
         public Task NotifyCustomerOfBillRejectedAsync(Guid tableSessionId);
         public Task NotifyCustomerOfOrderRejectedAsync(Guid deviceSessionId, int orderId);
+        public Task NotifyCustomerOfSessionEndedAsync(Guid tableSessionId);
+        public Task NotifyGuestsOfBillRequestAsync(Guid tableSessionId);
+        public Task NotifyTaxesUpdatedAsync();
     }
 }
 
@@ -2044,6 +2056,9 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveActivationDismissed(string message);
         public Task ReceiveBillRejected(string message);
         public Task ReceiveOrderRejected(int orderId, string message);
+        public Task ReceiveSessionEnded(string message);
+        public Task ReceiveBillRequested(string tableSessionId);
+        public Task ReceiveTaxesUpdated(string message);
     }
 }
 
@@ -3131,8 +3146,7 @@ namespace OrderingSystem.Application.Services
             if (order == null)
                 return Result<bool>.Failure("Order not found.", enErrorType.NotFound);
 
-            // Notify Customer before deletion so we still have the DeviceSessionId
-            await _notifier.NotifyCustomerOfOrderStatusAsync(order.DeviceSessionId, order.OrderId, enOrderStatus.Cancelled);
+            await _notifier.NotifyCustomerOfOrderRejectedAsync(order.DeviceSessionId, order.OrderId);
 
             // Per requirement: Order is immediately deleted from the database
             await _orderRepository.DeleteOrderAsync(order);
@@ -3391,6 +3405,8 @@ namespace OrderingSystem.Application.Services
             // This acts as the single "AcceptPayment" notification to the cashier
             await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
 
+            await _notifier.NotifyGuestsOfBillRequestAsync(tableSessionId);
+
             table.Status = enTableStatus.Billing;
             await _tableRepository.UpdateTableAsync(table);
 
@@ -3428,7 +3444,8 @@ namespace OrderingSystem.Application.Services
                 await _tableRepository.UpdateTableAsync(table);
             }
 
-            // Optional: Notify clients via SignalR to show the "Thank You" or "Receipt" screen
+            // 5. Notify clients via SignalR to show the "Thank You" or "Receipt" screen
+            await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
         }
@@ -3678,6 +3695,7 @@ namespace OrderingSystem.Application.Services
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Application\Services\TaxCommandService.cs
 ----------------------------------------
 ﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.TaxesInterfaces;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
@@ -3686,7 +3704,13 @@ using OrderingSystem.Domain.Enums;
 public class TaxCommandService : ITaxCommandService
 {
     private readonly ITaxRepository _taxRepository;
-    public TaxCommandService(ITaxRepository taxRepository) => _taxRepository = taxRepository;
+    private readonly IRealTimeNotifier _notifier; 
+
+    public TaxCommandService(ITaxRepository taxRepository, IRealTimeNotifier notifier)
+    {
+        _taxRepository = taxRepository;
+        _notifier = notifier;
+    }
 
     public async Task<Result<TaxRecords.TaxResponse>> AddTaxAsync(TaxRecords.AddTaxRequest request)
     {
@@ -3700,6 +3724,8 @@ public class TaxCommandService : ITaxCommandService
 
         var tax = new Tax { NameAr = request.NameAr, NameEn = request.NameEn, Amount = request.Amount, TaxType = request.TaxType, TaxScope = request.TaxScope, IsActive = request.IsActive };
         await _taxRepository.AddTaxAsync(tax);
+
+        await _notifier.NotifyTaxesUpdatedAsync(); 
 
         return Result<TaxRecords.TaxResponse>.Success(new TaxRecords.TaxResponse(tax.TaxId, tax.NameAr, tax.NameEn, tax.Amount, tax.TaxType, tax.TaxScope, tax.IsActive));
     }
@@ -3717,6 +3743,9 @@ public class TaxCommandService : ITaxCommandService
         tax.IsActive = request.IsActive;
 
         await _taxRepository.UpdateTaxAsync(tax);
+
+        await _notifier.NotifyTaxesUpdatedAsync(); 
+
         return Result<TaxRecords.TaxResponse>.Success(new TaxRecords.TaxResponse(tax.TaxId, tax.NameAr, tax.NameEn, tax.Amount, tax.TaxType, tax.TaxScope, tax.IsActive));
     }
 
@@ -3728,6 +3757,8 @@ public class TaxCommandService : ITaxCommandService
         tax.IsDeleted = true;
         tax.IsActive = false;
         await _taxRepository.UpdateTaxAsync(tax);
+
+        await _notifier.NotifyTaxesUpdatedAsync(); 
 
         return Result<bool>.Success(true);
     }
@@ -4264,7 +4295,11 @@ namespace OrderingSystem.Infrastructure.Data
                       .OnDelete(DeleteBehavior.Restrict);
 
                 entity.HasQueryFilter(e => !e.IsDeleted);
-            });
+
+                entity.HasIndex(t => new { t.TableNumber, t.FloorNumber })
+                      .IsUnique()
+                      .HasFilter("\"IsDeleted\" = false");
+        });
 
             // 3. TableSessions
             modelBuilder.Entity<TableSession>(entity =>
@@ -4280,8 +4315,9 @@ namespace OrderingSystem.Infrastructure.Data
                       .HasForeignKey(e => e.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
 
-                entity.HasIndex(s => new { s.TableId, s.ClosedAt })
-                      .HasFilter(@"""ClosedAt"" IS NULL"); 
+                entity.HasIndex(s => new { s.TableId, s.ClosedAt }, "IX_TableSessions_TableId")
+                      .HasFilter(@"""ClosedAt"" IS NULL")
+                      .IsUnique();
             });
 
             // 4. Categories
@@ -4352,6 +4388,7 @@ namespace OrderingSystem.Infrastructure.Data
 
                 entity.HasIndex(o => new { o.OrderStatus, o.CreatedAt });
 
+                entity.ToTable(t => t.HasCheckConstraint("CK_Order_TotalAmount_NonNegative", "\"TotalAmount\" >= 0"));
             });
 
             // 8. OrderItems
@@ -4370,6 +4407,12 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(m => m.OrderItems)
                       .HasForeignKey(e => e.MenuItemId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.ToTable(t =>
+                {
+                    t.HasCheckConstraint("CK_OrderItem_Quantity_Positive", "\"Quantity\" > 0");
+                    t.HasCheckConstraint("CK_OrderItem_UnitPrice_NonNegative", "\"UnitPrice\" >= 0");
+                });
             });
 
             modelBuilder.Entity<Tax>(entity =>
@@ -4380,6 +4423,7 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.Amount).HasPrecision(18, 2).IsRequired();
                 entity.Property(e => e.IsDeleted).IsRequired();
                 entity.HasQueryFilter(e => !e.IsDeleted);
+                entity.ToTable(t => t.HasCheckConstraint("CK_Tax_Amount_NonNegative", "\"Amount\" >= 0"));
             });
         }
     }
@@ -4479,6 +4523,24 @@ namespace OrderingSystem.Infrastructure.Notifications
         {
             await _hubContext.Clients.Group(deviceSessionId.ToString())
                 .ReceiveOrderRejected(orderId, "Your order request was rejected.");
+        }
+
+        public async Task NotifyCustomerOfSessionEndedAsync(Guid tableSessionId)
+        {
+            // Target the specific table session group so all devices at the table get it
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveSessionEnded("The table session has been closed. Thank you!");
+        }
+        
+        public async Task NotifyGuestsOfBillRequestAsync(Guid tableSessionId)
+        {
+            // Target the group containing ALL devices (Host + Guests) at this specific table
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveBillRequested(tableSessionId.ToString());
+        }
+        public async Task NotifyTaxesUpdatedAsync()
+        {
+            await _hubContext.Clients.All.ReceiveTaxesUpdated("The taxes configuration has been updated.");
         }
     }
 }
@@ -9283,6 +9345,565 @@ namespace OrderingSystem.Infrastructure.Migrations
 
 
 
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260909134011_EnforceDatabaseConstraints.cs
+----------------------------------------
+﻿using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    /// <inheritdoc />
+    public partial class EnforceDatabaseConstraints : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropIndex(
+                name: "IX_TableSessions_TableId_ClosedAt",
+                table: "TableSessions");
+
+            migrationBuilder.AddCheckConstraint(
+                name: "CK_Tax_Amount_NonNegative",
+                table: "Taxes",
+                sql: "\"Amount\" >= 0");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TableSessions_TableId",
+                table: "TableSessions",
+                columns: new[] { "TableId", "ClosedAt" },
+                unique: true,
+                filter: "\"ClosedAt\" IS NULL");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Tables_TableNumber_FloorNumber",
+                table: "Tables",
+                columns: new[] { "TableNumber", "FloorNumber" },
+                unique: true,
+                filter: "\"IsDeleted\" = false");
+
+            migrationBuilder.AddCheckConstraint(
+                name: "CK_Order_TotalAmount_NonNegative",
+                table: "Orders",
+                sql: "\"TotalAmount\" >= 0");
+
+            migrationBuilder.AddCheckConstraint(
+                name: "CK_OrderItem_Quantity_Positive",
+                table: "OrderItems",
+                sql: "\"Quantity\" > 0");
+
+            migrationBuilder.AddCheckConstraint(
+                name: "CK_OrderItem_UnitPrice_NonNegative",
+                table: "OrderItems",
+                sql: "\"UnitPrice\" >= 0");
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropCheckConstraint(
+                name: "CK_Tax_Amount_NonNegative",
+                table: "Taxes");
+
+            migrationBuilder.DropIndex(
+                name: "IX_TableSessions_TableId",
+                table: "TableSessions");
+
+            migrationBuilder.DropIndex(
+                name: "IX_Tables_TableNumber_FloorNumber",
+                table: "Tables");
+
+            migrationBuilder.DropCheckConstraint(
+                name: "CK_Order_TotalAmount_NonNegative",
+                table: "Orders");
+
+            migrationBuilder.DropCheckConstraint(
+                name: "CK_OrderItem_Quantity_Positive",
+                table: "OrderItems");
+
+            migrationBuilder.DropCheckConstraint(
+                name: "CK_OrderItem_UnitPrice_NonNegative",
+                table: "OrderItems");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TableSessions_TableId_ClosedAt",
+                table: "TableSessions",
+                columns: new[] { "TableId", "ClosedAt" },
+                filter: "\"ClosedAt\" IS NULL");
+        }
+    }
+}
+
+
+
+FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\20260909134011_EnforceDatabaseConstraints.Designer.cs
+----------------------------------------
+﻿// <auto-generated />
+using System;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+using OrderingSystem.Infrastructure.Data;
+
+#nullable disable
+
+namespace OrderingSystem.Infrastructure.Migrations
+{
+    [DbContext(typeof(OrderingSystemDbContext))]
+    [Migration("20260909134011_EnforceDatabaseConstraints")]
+    partial class EnforceDatabaseConstraints
+    {
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+
+            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Property<int>("CategoryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("CategoryId"));
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.HasKey("CategoryId");
+
+                    b.ToTable("Categories");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Property<Guid>("DeviceSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsApproved")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.ToTable("SessionDevices");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Property<int>("MenuItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("MenuItemId"));
+
+                    b.Property<int>("CategoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Emoji")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<decimal>("Price")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("MenuItemId");
+
+                    b.HasIndex("CategoryId", "IsAvailable", "IsDeleted");
+
+                    b.ToTable("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Property<int>("OrderId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeviceSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("OrderStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("OrderId");
+
+                    b.HasIndex("DeviceSessionId");
+
+                    b.HasIndex("TableSessionId");
+
+                    b.HasIndex("OrderStatus", "CreatedAt");
+
+                    b.ToTable("Orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_Order_TotalAmount_NonNegative", "\"TotalAmount\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.Property<int>("OrderItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("OrderItemId"));
+
+                    b.Property<int>("MenuItemId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("OrderId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("OrderItemId");
+
+                    b.HasIndex("MenuItemId");
+
+                    b.HasIndex("OrderId");
+
+                    b.ToTable("OrderItems", t =>
+                        {
+                            t.HasCheckConstraint("CK_OrderItem_Quantity_Positive", "\"Quantity\" > 0");
+
+                            t.HasCheckConstraint("CK_OrderItem_UnitPrice_NonNegative", "\"UnitPrice\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Property<int>("TableId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TableId"));
+
+                    b.Property<int>("FloorNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("QrCode")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("TableId");
+
+                    b.HasIndex("TableNumber", "FloorNumber")
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.ToTable("Tables");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Property<Guid>("TableSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TableId")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("TableSessionId");
+
+                    b.HasIndex(new[] { "TableId", "ClosedAt" }, "IX_TableSessions_TableId")
+                        .IsUnique()
+                        .HasFilter("\"ClosedAt\" IS NULL");
+
+                    b.ToTable("TableSessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Tax", b =>
+                {
+                    b.Property<int>("TaxId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TaxId"));
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("TaxScope")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TaxType")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TaxId");
+
+                    b.ToTable("Taxes", t =>
+                        {
+                            t.HasCheckConstraint("CK_Tax_Amount_NonNegative", "\"Amount\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
+                {
+                    b.Property<int>("UserId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("UserId"));
+
+                    b.Property<DateTime?>("AbsoluteRefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RefreshToken")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<DateTime?>("RefreshTokenExpiryTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "TableSession")
+                        .WithMany("Devices")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TableSession");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Category", "Category")
+                        .WithMany("MenuItems")
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.DeviceSession", "Device")
+                        .WithMany("Orders")
+                        .HasForeignKey("DeviceSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "Session")
+                        .WithMany("Orders")
+                        .HasForeignKey("TableSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.MenuItem", "MenuItem")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("MenuItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OrderingSystem.Domain.Entities.Order", "Order")
+                        .WithMany("OrderItems")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("MenuItem");
+
+                    b.Navigation("Order");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Table", "Table")
+                        .WithMany("Sessions")
+                        .HasForeignKey("TableId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Table");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
+                {
+                    b.Navigation("MenuItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
+                {
+                    b.Navigation("Orders");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.MenuItem", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Order", b =>
+                {
+                    b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
+                {
+                    b.Navigation("Sessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
+                {
+                    b.Navigation("Devices");
+
+                    b.Navigation("Orders");
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+
+
+
 FILE: C:\Users\ASUS\source\repos\OrderingSystem\Backend\OrderingSystem.Infrastructure\Migrations\OrderingSystemDbContextModelSnapshot.cs
 ----------------------------------------
 ﻿// <auto-generated />
@@ -9444,7 +10065,10 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("OrderStatus", "CreatedAt");
 
-                    b.ToTable("Orders");
+                    b.ToTable("Orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_Order_TotalAmount_NonNegative", "\"TotalAmount\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
@@ -9478,7 +10102,12 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("OrderId");
 
-                    b.ToTable("OrderItems");
+                    b.ToTable("OrderItems", t =>
+                        {
+                            t.HasCheckConstraint("CK_OrderItem_Quantity_Positive", "\"Quantity\" > 0");
+
+                            t.HasCheckConstraint("CK_OrderItem_UnitPrice_NonNegative", "\"UnitPrice\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
@@ -9514,6 +10143,10 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TableId");
 
+                    b.HasIndex("TableNumber", "FloorNumber")
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
+
                     b.ToTable("Tables");
                 });
 
@@ -9543,7 +10176,8 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TableSessionId");
 
-                    b.HasIndex("TableId", "ClosedAt")
+                    b.HasIndex(new[] { "TableId", "ClosedAt" }, "IX_TableSessions_TableId")
+                        .IsUnique()
                         .HasFilter("\"ClosedAt\" IS NULL");
 
                     b.ToTable("TableSessions");
@@ -9585,7 +10219,10 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TaxId");
 
-                    b.ToTable("Taxes");
+                    b.ToTable("Taxes", t =>
+                        {
+                            t.HasCheckConstraint("CK_Tax_Amount_NonNegative", "\"Amount\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
@@ -10199,7 +10836,7 @@ namespace OrderingSystem.Infrastructure.Queries
                         oi.UnitPrice,
                         oi.Notes
                     )).ToList()
-                ))
+                )) 
                 .ToListAsync();
 
             var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);

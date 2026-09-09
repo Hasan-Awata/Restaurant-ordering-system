@@ -1,7 +1,8 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using OrderingSystem.Application.DTOs;
-using Microsoft.AspNetCore.Authorization;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.WebApi.Controllers.Base;
 
 namespace OrderingSystem.WebApi.Controllers
@@ -25,6 +26,7 @@ namespace OrderingSystem.WebApi.Controllers
 
         // ── CUSTOMER PATH: Scan the QR code ─────────────────────────────────────
         [HttpPost("qr")]
+        [DisableRateLimiting] // Whitelist this endpoint from the global rate limiting policy
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
             // Use the secure cookie value extracted by the BaseController
@@ -52,7 +54,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // ── CASHIER PATH: Approve the activation request ────────────────────────
-        //[Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Roles = "RequireStaff")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -85,7 +87,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // ── CASHIER PATH: Close session after payment ───────────────────────────
-        //[Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpPost("end")]
         public async Task<IActionResult> EndTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -105,7 +107,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpPost("dismiss")]
         public async Task<IActionResult> DismissTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -113,7 +115,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpPost("dismiss-bill")]
         public async Task<IActionResult> DismissBill([FromBody] ActivateTableSessionRequest request)
         {
@@ -122,7 +124,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // 2. READ ENDPOINT (Query Path)
-      //  [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {

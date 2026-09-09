@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.WebApi.Controllers.Base;
@@ -18,15 +19,15 @@ namespace OrderingSystem.WebApi.Controllers
             _authCommandService = authCommandService;
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpPost("login")]
+        [EnableRateLimiting("LoginPolicy")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
             var result = await _authCommandService.LoginAsync(request);
             return HandleResult(result);
         }
 
-        //[Authorize(Roles = "Admin")]
+        [Authorize(Policy = "AdminOnly")] 
         [HttpPost("register")]
         public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
         {

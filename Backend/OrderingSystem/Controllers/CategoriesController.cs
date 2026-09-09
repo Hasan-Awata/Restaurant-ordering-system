@@ -23,7 +23,7 @@ namespace OrderingSystem.WebApi.Controllers
             _categoryQueryService = categoryQueryService;
         }
 
-      //  [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpPost]
         public async Task<IActionResult> AddCategory([FromBody] CategoriesRecords.AddCategoryRequest request)
         {
@@ -36,7 +36,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-//        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpPut]
         public async Task<IActionResult> UpdateCategory([FromBody] CategoriesRecords.UpdateCategoryRequest request)
         {
@@ -44,21 +44,21 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-  //      [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpDelete]
         public async Task<IActionResult> DeleteCategory([FromBody] CategoriesRecords.DeleteCategoryRequest request)
         {
             var result = await _categoryCommandService.DeleteCategoryAsync(request);
             return HandleResult(result);
         }
-    //    [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetCategoryById(int id)
         {
             var result = await _categoryQueryService.GetCategoryByIdAsync(id);
             return HandleResult(result);
         }
-      //  [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetCategory(int id)
         {
@@ -66,7 +66,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-       // [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet]
         public async Task<IActionResult> GetAllCategories([FromQuery] PageDTO page)
         {
@@ -74,7 +74,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-       // [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableCategories([FromQuery] PageDTO page)
         {

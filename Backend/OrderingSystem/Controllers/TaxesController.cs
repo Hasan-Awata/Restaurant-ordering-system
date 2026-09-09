@@ -9,7 +9,7 @@ namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/taxes")]
-    [Authorize(Roles = "Admin")] 
+    [Authorize(Policy = "AdminOnly")]
     public class TaxesController : BaseController
     {
         private readonly ITaxCommandService _taxCommandService;

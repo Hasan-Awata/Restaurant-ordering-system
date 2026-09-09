@@ -17,6 +17,7 @@ using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.Application.Interfaces.TaxesInterfaces;
 using OrderingSystem.Application.Services;
+using OrderingSystem.Domain.Enums;
 using OrderingSystem.Infrastructure.Authentication;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Infrastructure.ExternalServices.Notifications;
@@ -58,19 +59,51 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 builder.Services.AddRateLimiter(options =>
 {
-    options.AddPolicy("Fixed", httpContext =>
-    {
-        var partitionKey = httpContext.Request.Cookies["DeviceSessionId"] ??
-                           httpContext.Connection.RemoteIpAddress?.ToString() ??
-                           httpContext.TraceIdentifier; 
+    // Return a standard 429 status code when limits are hit
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-        return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ =>
+    options.AddPolicy("DynamicRestaurantPolicy", httpContext =>
+    {
+        // 1. Check if the user is already authenticated via device session
+        var hasDeviceSession = httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var sessionId);
+
+        if (hasDeviceSession && !string.IsNullOrWhiteSpace(sessionId))
+        {
+            // Authenticated Device: Standard limit per individual device
+            return RateLimitPartition.GetFixedWindowLimiter(sessionId, _ =>
+                new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 150, 
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 10 // Increased queue to absorb brief network reconnects
+                });
+        }
+
+        // 2. Anonymous Request: IP-based partition (Shared Restaurant Wi-Fi)
+        var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? httpContext.TraceIdentifier;
+
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ =>
             new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 100,
+                PermitLimit = 1000, // Massive threshold to account for NAT/Shared Wi-Fi
                 Window = TimeSpan.FromMinutes(1),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 2
+                QueueLimit = 50 // Large queue to prevent dropping legitimate new connections
+            });
+    });
+
+    options.AddPolicy("LoginPolicy", httpContext =>
+    {
+        var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? httpContext.TraceIdentifier;
+
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ =>
+            new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5, // 5 tries only
+                Window = TimeSpan.FromMinutes(1), // every minute
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0 // reject the request immediately if the limit is exceeded
             });
     });
 });
@@ -199,7 +232,19 @@ builder.Services.AddAuthentication(options =>
         }
     };
 });
-builder.Services.AddAuthorization();
+
+builder.Services.AddAuthorization(options =>
+{
+    // Strict access for Managers/Owners
+    options.AddPolicy("AdminOnly", policy =>
+        policy.RequireRole(enRoleType.Admin.ToString()));
+
+    // Operational access for Front-of-House
+    options.AddPolicy("RequireStaff", policy =>
+        policy.RequireRole(
+            enRoleType.Admin.ToString(),
+            enRoleType.Cashier.ToString())); 
+});
 
 // ── Adding CORS policy ────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
@@ -250,7 +295,7 @@ else
 
 app.UseAuthentication();
 app.UseAuthorization();
-app.MapControllers().RequireRateLimiting("Fixed");
+app.MapControllers().RequireRateLimiting("DynamicRestaurantPolicy"); 
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 app.MapHealthChecks("/api/health");
 

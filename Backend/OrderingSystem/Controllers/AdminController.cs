@@ -10,8 +10,9 @@ using System.Threading.Tasks;
 
 namespace OrderingSystem.Controllers
 {
-    [Route("api/Admin")]
     [ApiController]
+    [Route("api/Admin")]
+    [Authorize(Policy = "RequireStaff")]
     public class AdminController : BaseController
     {
         private readonly IOrderQuery _orderQuery;
@@ -23,7 +24,6 @@ namespace OrderingSystem.Controllers
             _tableQuery = tableQuery;
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("top-three-today")]
         public async Task<IActionResult> GetTopThreeItemsToday()
         {
@@ -31,7 +31,6 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("pending-count-orders")]
         public async Task<IActionResult> GetCountOfPendingOrders()
         {
@@ -39,7 +38,6 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-       // [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-orders")]
         public async Task<IActionResult> GetCountOfOrders()
         {
@@ -47,7 +45,6 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("total-count-table")]
         public async Task<IActionResult> GetCountOfTaple()
         {
@@ -55,7 +52,6 @@ namespace OrderingSystem.Controllers
             return HandleResult(result);
         }
 
-     //   [Authorize(Roles = "Admin,Cashier")]
         [HttpGet("historical-bills")] 
         public async Task<IActionResult> GetHistoricalBills(
             [FromQuery] DateTime startDate,
