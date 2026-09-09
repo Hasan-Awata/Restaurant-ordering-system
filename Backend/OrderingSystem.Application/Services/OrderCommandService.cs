@@ -119,8 +119,7 @@ namespace OrderingSystem.Application.Services
             if (order == null)
                 return Result<bool>.Failure("Order not found.", enErrorType.NotFound);
 
-            // Notify Customer before deletion so we still have the DeviceSessionId
-            await _notifier.NotifyCustomerOfOrderStatusAsync(order.DeviceSessionId, order.OrderId, enOrderStatus.Cancelled);
+            await _notifier.NotifyCustomerOfOrderRejectedAsync(order.DeviceSessionId, order.OrderId);
 
             // Per requirement: Order is immediately deleted from the database
             await _orderRepository.DeleteOrderAsync(order);
