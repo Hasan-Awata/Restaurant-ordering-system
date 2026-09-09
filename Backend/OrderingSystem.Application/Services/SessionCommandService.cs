@@ -258,7 +258,8 @@ namespace OrderingSystem.Application.Services
                 await _tableRepository.UpdateTableAsync(table);
             }
 
-            // Optional: Notify clients via SignalR to show the "Thank You" or "Receipt" screen
+            // 5. Notify clients via SignalR to show the "Thank You" or "Receipt" screen
+            await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
         }

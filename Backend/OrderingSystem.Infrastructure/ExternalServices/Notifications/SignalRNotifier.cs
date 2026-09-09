@@ -90,5 +90,12 @@ namespace OrderingSystem.Infrastructure.Notifications
             await _hubContext.Clients.Group(deviceSessionId.ToString())
                 .ReceiveOrderRejected(orderId, "Your order request was rejected.");
         }
+
+        public async Task NotifyCustomerOfSessionEndedAsync(Guid tableSessionId)
+        {
+            // Target the specific table session group so all devices at the table get it
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveSessionEnded("The table session has been closed. Thank you!");
+        }
     }
 }
