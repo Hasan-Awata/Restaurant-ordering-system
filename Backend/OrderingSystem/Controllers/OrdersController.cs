@@ -10,7 +10,6 @@ namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/orders")]
-    [Authorize(Policy = "RequireStaff")]
     public class OrdersController : BaseController
     {
         private readonly IOrderCommandService _orderCommandService;
@@ -23,6 +22,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpPost]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
             var result = await _orderCommandService.AddOrderAsync(request);
@@ -49,6 +49,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpDelete("{id}/customer-cancel")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> CustomerCancelOrder(int id)
         {
             if (!CurrentDeviceSessionId.HasValue)
@@ -66,6 +67,7 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _orderQuery.GetPendingOrdersAsync(page);
             return HandleResult(result);
         }
+
         [HttpGet("historical-bills")]
         public async Task<IActionResult> GetHistoricalBills(
          [FromQuery] DateTime startDate,
