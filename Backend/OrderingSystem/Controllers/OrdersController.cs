@@ -22,7 +22,6 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpPost]
-        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
             var result = await _orderCommandService.AddOrderAsync(request);
@@ -35,6 +34,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpPut("{id}/approve")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> ApproveOrder(int id)
         {
             var result = await _orderCommandService.ApproveOrderAsync(id);
@@ -42,6 +42,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpDelete("{id}/cancel")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> CancelOrder(int id)
         {
             var result = await _orderCommandService.CancelOrderAsync(id);
@@ -49,7 +50,6 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpDelete("{id}/customer-cancel")]
-        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> CustomerCancelOrder(int id)
         {
             if (!CurrentDeviceSessionId.HasValue)
@@ -62,6 +62,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpGet("pending")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> GetPendingOrders([FromQuery] PageDTO page)
         {
             var result = await _orderQuery.GetPendingOrdersAsync(page);
@@ -69,6 +70,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpGet("historical-bills")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> GetHistoricalBills(
          [FromQuery] DateTime startDate,
          [FromQuery] DateTime endDate,
