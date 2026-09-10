@@ -158,8 +158,7 @@
 │   ├── Seeding
 │   │   └── DatabaseSeeder.cs
 │   └── signalr-test.html
-├── ai_net_project_context.xml
-└── lean_project_dump.txt
+└── ai_net_project_context.xml
   </directory_structure>
 </project_context>
 
@@ -4072,7 +4071,7 @@ namespace OrderingSystem.Domain.Entities
 {
     public class Bill
     {
-        public Guid BillId { get; set; } = Guid.CreateVersion7();
+        public int BillId { get; set; }
         public Guid TableSessionId { get; set; }
         public decimal TotalSubTotal { get; set; }
         public decimal TotalTax { get; set; }
@@ -4096,7 +4095,7 @@ namespace OrderingSystem.Domain.Entities
     public class BillItem
     {
         public int BillItemId { get; set; }
-        public Guid BillId { get; set; }
+        public int BillId { get; set; }
         public int MenuItemId { get; set; }
         public string NameAr { get; set; } = string.Empty;
         public string NameEn { get; set; } = string.Empty;
@@ -4118,7 +4117,7 @@ namespace OrderingSystem.Domain.Entities
     public class BillTax
     {
         public int BillTaxId { get; set; }
-        public Guid BillId { get; set; }
+        public int BillId { get; set; }
         public string TaxNameAr { get; set; } = string.Empty;
         public string TaxNameEn { get; set; } = string.Empty;
         public decimal AppliedAmount { get; set; }

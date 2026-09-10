@@ -8,6 +8,8 @@ namespace OrderingSystem.Application.Interfaces.Auth
         Task<User?> GetUserByIdAsync(int userId); 
         Task<bool> UserExistsAsync(string fullName);
         Task AddUserAsync(User user);
-        Task UpdateUserAsync(User user); 
+        Task UpdateUserAsync(User user);
+        Task<IEnumerable<User>> GetAllUsersAsync();
+        Task DeleteUserAsync(User user);
     }
 }

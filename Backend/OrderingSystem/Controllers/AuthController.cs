@@ -36,15 +36,24 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
         
-      [HttpPost("refresh-token")]
+        [HttpPost("refresh-token")]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
         {
             var result = await _authCommandService.RefreshTokenAsync(request);
             return HandleResult(result);
         }
 
-       //[Authorize(Roles = "Admin,Cashier")]
+        [Authorize]
+        [HttpPut("profile")]
+        public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest request)
+        {
+            if (!CurrentUserId.HasValue) return Unauthorized(new { error = "Invalid token claims." });
 
+            var result = await _authCommandService.UpdateProfileAsync(CurrentUserId.Value, request);
+            return HandleResult(result);
+        }
+
+        [Authorize]
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
         {

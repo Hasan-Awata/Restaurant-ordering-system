@@ -119,5 +119,54 @@ namespace OrderingSystem.Application.Services
 
             return Result.Success();
         }
+
+        public async Task<Result<UserResponse>> UpdateUserAsync(int userId, UpdateUserRequest request)
+        {
+            var user = await _userRepository.GetUserByIdAsync(userId);
+            if (user == null) return Result<UserResponse>.Failure("User not found.", enErrorType.NotFound);
+
+            if (!string.IsNullOrWhiteSpace(request.FullName))
+                user.FullName = request.FullName;
+
+            if (request.Role.HasValue)
+                user.Role = request.Role.Value;
+
+            if (!string.IsNullOrWhiteSpace(request.Password))
+                user.PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(request.Password);
+
+            await _userRepository.UpdateUserAsync(user);
+            return Result<UserResponse>.Success(new UserResponse(user.UserId, user.FullName, user.Role));
+        }
+
+        public async Task<Result<bool>> DeleteUserAsync(int userId)
+        {
+            var user = await _userRepository.GetUserByIdAsync(userId);
+            if (user == null) return Result<bool>.Failure("User not found.", enErrorType.NotFound);
+
+            await _userRepository.DeleteUserAsync(user);
+            return Result<bool>.Success(true);
+        }
+
+        public async Task<Result<bool>> UpdateProfileAsync(int userId, UpdateProfileRequest request)
+        {
+            var user = await _userRepository.GetUserByIdAsync(userId);
+            if (user == null) return Result<bool>.Failure("User not found.", enErrorType.NotFound);
+
+            if (!string.IsNullOrWhiteSpace(request.CurrentPassword) && !string.IsNullOrWhiteSpace(request.NewPassword))
+            {
+                if (!BCrypt.Net.BCrypt.EnhancedVerify(request.CurrentPassword, user.PasswordHash))
+                    return Result<bool>.Failure("Invalid current password.", enErrorType.Validation);
+
+                user.PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(request.NewPassword);
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.FullName))
+            {
+                user.FullName = request.FullName;
+            }
+
+            await _userRepository.UpdateUserAsync(user);
+            return Result<bool>.Success(true);
+        }
     }
 }
