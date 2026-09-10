@@ -57,6 +57,14 @@ namespace OrderingSystem.WebApi.Controllers
                 );
 
                 Response.Cookies.Append("SignalRContext", signalRToken, cookieOptions);
+
+                // 3. For Flutter applications, return the token in the response body as well
+                return Ok(new
+                {
+                    tableSession = result.Value.TableSession,
+                    deviceSession = result.Value.DeviceSession,
+                    accessToken = signalRToken
+                });
             }
 
             return HandleResult(result);
