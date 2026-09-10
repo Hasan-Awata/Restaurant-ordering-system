@@ -9,7 +9,6 @@ namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/taxes")]
-    [Authorize(Policy = "AdminOnly")]
     public class TaxesController : BaseController
     {
         private readonly ITaxCommandService _taxCommandService;
@@ -20,16 +19,16 @@ namespace OrderingSystem.WebApi.Controllers
             _taxCommandService = taxCommandService;
             _taxQuery = taxQuery;
         }
-        //[Authorize(Roles = "Admin,Cashier")]
 
+        [Authorize(Policy = "AdminOnly")]
         [HttpPost]
         public async Task<IActionResult> AddTax([FromBody] TaxRecords.AddTaxRequest request)
         {
             var result = await _taxCommandService.AddTaxAsync(request);
             return HandleCreatedResult(result, nameof(GetTaxById), new { id = result.Value?.TaxId });
         }
-        //[Authorize(Roles = "Admin,Cashier")]
 
+        [Authorize(Policy = "AdminOnly")]
         [HttpPut]
         public async Task<IActionResult> UpdateTax([FromBody] TaxRecords.UpdateTaxRequest request)
         {
@@ -37,7 +36,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteTax(int id)
         {
@@ -45,7 +44,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetTaxById(int id)
         {
@@ -53,9 +51,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        //[Authorize(Roles = "Admin,Cashier")]
         [HttpGet]
-      //  [AllowAnonymous] // Or change to [Authorize(Roles = "Admin,Cashier")] based on your needs
         public async Task<IActionResult> GetAllTaxes([FromQuery] PageDTO page)
         {
             var result = await _taxQuery.GetAllTaxesAsync(page);

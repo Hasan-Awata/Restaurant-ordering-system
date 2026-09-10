@@ -179,6 +179,7 @@ builder.Services.AddScoped<ITaxCommandService, TaxCommandService>();
 builder.Services.AddScoped<ITaxQuery, TaxQuery>();
 builder.Services.AddScoped<ITaxCalculationService, TaxCalculationService>();
 builder.Services.AddScoped<IBillRepository, BillRepository>();
+builder.Services.AddScoped<IUserQuery, UserQuery>();
 
 // ── JWT Authentication ────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");

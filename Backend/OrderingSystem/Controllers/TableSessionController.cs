@@ -63,7 +63,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         // ── CASHIER PATH: Approve the activation request ────────────────────────
-        [Authorize(Roles = "RequireStaff")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
         {

@@ -21,7 +21,8 @@
 │   │   ├── OrdersController.cs
 │   │   ├── TableSessionController.cs
 │   │   ├── TablesController.cs
-│   │   └── TaxesController.cs
+│   │   ├── TaxesController.cs
+│   │   └── UsersController.cs
 │   ├── Dockerfile
 │   ├── Middleware
 │   │   └── GlobalExceptionHandler.cs
@@ -54,6 +55,7 @@
 │   │   ├── Authentication
 │   │   │   ├── IAuthCommandService.cs
 │   │   │   ├── IJwtProvider.cs
+│   │   │   ├── IUserQuery.cs
 │   │   │   └── IUserRepository.cs
 │   │   ├── Bills
 │   │   │   └── IBillRepository.cs
@@ -144,7 +146,8 @@
 │   │   ├── OrderQuery.cs
 │   │   ├── TableQuery.cs
 │   │   ├── TableSessionQuery.cs
-│   │   └── TaxQuery.cs
+│   │   ├── TaxQuery.cs
+│   │   └── UserQuery.cs
 │   ├── Repositories
 │   │   ├── BillRepository.cs
 │   │   ├── CategoryRepository.cs
@@ -698,15 +701,24 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-      [HttpPost("refresh-token")]
+        [HttpPost("refresh-token")]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
         {
             var result = await _authCommandService.RefreshTokenAsync(request);
             return HandleResult(result);
         }
 
-       //[Authorize(Roles = "Admin,Cashier")]
+        [Authorize]
+        [HttpPut("profile")]
+        public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest request)
+        {
+            if (!CurrentUserId.HasValue) return Unauthorized(new { error = "Invalid token claims." });
 
+            var result = await _authCommandService.UpdateProfileAsync(CurrentUserId.Value, request);
+            return HandleResult(result);
+        }
+
+        [Authorize]
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
         {
@@ -1501,6 +1513,57 @@ namespace OrderingSystem.WebApi.Controllers
 }
 </file>
 
+<file path="OrderingSystem/Controllers/UsersController.cs">
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Authentication;
+using OrderingSystem.WebApi.Controllers.Base;
+
+namespace OrderingSystem.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/users")]
+    [Authorize(Policy = "AdminOnly")]
+    public class UsersController : BaseController
+    {
+        private readonly IUserQuery _userQuery;
+        private readonly IAuthCommandService _authCommandService;
+
+        public UsersController(IUserQuery userQuery, IAuthCommandService authCommandService)
+        {
+            _userQuery = userQuery;
+            _authCommandService = authCommandService;
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetAllUsers()
+        {
+            var result = await _userQuery.GetAllUsersAsync();
+            if (result.IsSuccess)
+            {
+                return Ok(new { users = result.Value?.Select(u => new { id = u.UserId, fullName = u.FullName, role = u.Role.ToString() }) });
+            }
+            return HandleResult(result);
+        }
+
+        [HttpPut("{userId}")]
+        public async Task<IActionResult> UpdateUser(int userId, [FromBody] UpdateUserRequest request)
+        {
+            var result = await _authCommandService.UpdateUserAsync(userId, request);
+            return HandleResult(result);
+        }
+
+        [HttpDelete("{userId}")]
+        public async Task<IActionResult> DeleteUser(int userId)
+        {
+            var result = await _authCommandService.DeleteUserAsync(userId);
+            return HandleResult(result);
+        }
+    }
+}
+</file>
+
 <file path="OrderingSystem/Middleware/GlobalExceptionHandler.cs">
 ﻿using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -1700,6 +1763,8 @@ namespace OrderingSystem.Application.DTOs
         public record CreateUserRequest(string FullName, string Password, enRoleType Role);
         public record UserResponse(int UserId, string FullName, enRoleType Role);
         public record RefreshTokenRequest(string AccessToken, string RefreshToken);
+        public record UpdateUserRequest(string? FullName, enRoleType? Role, string? Password);
+        public record UpdateProfileRequest(string? FullName, string? CurrentPassword, string? NewPassword);
 }
 </file>
 
@@ -1977,6 +2042,9 @@ namespace OrderingSystem.Application.Interfaces.Authentication
         Task<Result> LogoutAsync(int userId, string token);
         Task<Result<UserResponse>> CreateUserAsync(CreateUserRequest request);
         Task<Result<LoginResponse>> RefreshTokenAsync(RefreshTokenRequest request);
+        Task<Result<UserResponse>> UpdateUserAsync(int userId, UpdateUserRequest request);
+        Task<Result<bool>> DeleteUserAsync(int userId);
+        Task<Result<bool>> UpdateProfileAsync(int userId, UpdateProfileRequest request);
     }
 }
 </file>
@@ -2001,6 +2069,19 @@ namespace OrderingSystem.Application.Interfaces.Authentication
 }
 </file>
 
+<file path="OrderingSystem.Application/Interfaces/Authentication/IUserQuery.cs">
+﻿using OrderingSystem.Application.DTOs;
+using OrderingSystem.Domain.Common;
+
+namespace OrderingSystem.Application.Interfaces.Authentication
+{
+    public interface IUserQuery
+    {
+        Task<Result<IEnumerable<UserResponse>>> GetAllUsersAsync();
+    }
+}
+</file>
+
 <file path="OrderingSystem.Application/Interfaces/Authentication/IUserRepository.cs">
 ﻿using OrderingSystem.Domain.Entities;
 
@@ -2013,6 +2094,8 @@ namespace OrderingSystem.Application.Interfaces.Auth
         Task<bool> UserExistsAsync(string fullName);
         Task AddUserAsync(User user);
         Task UpdateUserAsync(User user);
+        Task<IEnumerable<User>> GetAllUsersAsync();
+        Task DeleteUserAsync(User user);
     }
 }
 </file>
@@ -2767,6 +2850,55 @@ namespace OrderingSystem.Application.Services
             _cache.Set($"blacklist_{token}", true, TimeSpan.FromMinutes(15));
 
             return Result.Success();
+        }
+
+        public async Task<Result<UserResponse>> UpdateUserAsync(int userId, UpdateUserRequest request)
+        {
+            var user = await _userRepository.GetUserByIdAsync(userId);
+            if (user == null) return Result<UserResponse>.Failure("User not found.", enErrorType.NotFound);
+
+            if (!string.IsNullOrWhiteSpace(request.FullName))
+                user.FullName = request.FullName;
+
+            if (request.Role.HasValue)
+                user.Role = request.Role.Value;
+
+            if (!string.IsNullOrWhiteSpace(request.Password))
+                user.PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(request.Password);
+
+            await _userRepository.UpdateUserAsync(user);
+            return Result<UserResponse>.Success(new UserResponse(user.UserId, user.FullName, user.Role));
+        }
+
+        public async Task<Result<bool>> DeleteUserAsync(int userId)
+        {
+            var user = await _userRepository.GetUserByIdAsync(userId);
+            if (user == null) return Result<bool>.Failure("User not found.", enErrorType.NotFound);
+
+            await _userRepository.DeleteUserAsync(user);
+            return Result<bool>.Success(true);
+        }
+
+        public async Task<Result<bool>> UpdateProfileAsync(int userId, UpdateProfileRequest request)
+        {
+            var user = await _userRepository.GetUserByIdAsync(userId);
+            if (user == null) return Result<bool>.Failure("User not found.", enErrorType.NotFound);
+
+            if (!string.IsNullOrWhiteSpace(request.CurrentPassword) && !string.IsNullOrWhiteSpace(request.NewPassword))
+            {
+                if (!BCrypt.Net.BCrypt.EnhancedVerify(request.CurrentPassword, user.PasswordHash))
+                    return Result<bool>.Failure("Invalid current password.", enErrorType.Validation);
+
+                user.PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(request.NewPassword);
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.FullName))
+            {
+                user.FullName = request.FullName;
+            }
+
+            await _userRepository.UpdateUserAsync(user);
+            return Result<bool>.Success(true);
         }
     }
 }
@@ -5819,6 +5951,37 @@ namespace OrderingSystem.Infrastructure.Queries
 }
 </file>
 
+<file path="OrderingSystem.Infrastructure/Queries/UserQuery.cs">
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.DTOs;
+using OrderingSystem.Application.Interfaces.Authentication;
+using OrderingSystem.Domain.Common;
+using OrderingSystem.Infrastructure.Data;
+
+namespace OrderingSystem.Infrastructure.Queries
+{
+    public class UserQuery : IUserQuery
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public UserQuery(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task<Result<IEnumerable<UserResponse>>> GetAllUsersAsync()
+        {
+            var users = await _context.Users
+                .AsNoTracking()
+                .Select(u => new UserResponse(u.UserId, u.FullName, u.Role))
+                .ToListAsync();
+
+            return Result<IEnumerable<UserResponse>>.Success(users);
+        }
+    }
+}
+</file>
+
 <file path="OrderingSystem.Infrastructure/Repositories/BillRepository.cs">
 ﻿using OrderingSystem.Application.Interfaces.Bills;
 using OrderingSystem.Domain.Entities;
@@ -6299,6 +6462,17 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task UpdateUserAsync(User user)
         {
             _context.Users.Update(user);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task<IEnumerable<User>> GetAllUsersAsync()
+        {
+            return await _context.Users.AsNoTracking().ToListAsync();
+        }
+
+        public async Task DeleteUserAsync(User user)
+        {
+            _context.Users.Remove(user);
             await _context.SaveChangesAsync();
         }
     }
