@@ -52,7 +52,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Policy = "AdminOnly")]
         [HttpGet("{id}")]
         public async Task<IActionResult> GetItemById(int id)
         {
@@ -60,7 +59,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
         
-        [Authorize(Policy = "AdminOnly")]
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetMenuItem(int id)
         {
@@ -68,7 +66,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
        
-        [Authorize(Policy = "AdminOnly")]
         [HttpGet]
         public async Task<IActionResult> GetAllMenuItems([FromQuery] PageDTO page)
         {
@@ -76,7 +73,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
         
-        [Authorize(Policy = "AdminOnly")]
         [HttpGet("category/{categoryId}")]
         public async Task<IActionResult> GetAllMenuItemsByCategory(int categoryId, [FromQuery] PageDTO page)
         {
@@ -84,7 +80,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
         
-        [Authorize(Policy = "AdminOnly")]
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableMenuItems([FromQuery] PageDTO page)
         {
@@ -92,7 +87,6 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Policy = "AdminOnly")]
         [HttpGet("search")]
         public async Task<IActionResult> SearchMenuItems([FromQuery] string query, [FromQuery] PageDTO page)
         {
