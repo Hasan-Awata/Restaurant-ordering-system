@@ -34,11 +34,11 @@ namespace OrderingSystem.Infrastructure.Notifications
                 .ReceiveHostApprovalNotification("Your request to join the table has been approved.");
         }
 
-        public async Task NotifyHostOfTableActivationAsync(Guid tableSessionId)
+        public async Task NotifyHostOfTableActivationAsync(Guid hostDeviceSessionId, Guid tableSessionId)
         {
             // The Host connects to a group named after their DeviceSessionId while waiting
-            await _hubContext.Clients.Group(tableSessionId.ToString())
-                .ReceiveCashierApprovalNotification(tableSessionId, "Your table has been approved by the cashier and is now active.");
+            await _hubContext.Clients.Group(hostDeviceSessionId.ToString())
+                    .ReceiveCashierApprovalNotification(tableSessionId, "Your table has been approved by the cashier and is now active.");
         }
 
         public async Task NotifyCashierOfNewOrderAsync(int orderId, Guid tableSessionId)

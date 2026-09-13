@@ -164,7 +164,7 @@ namespace OrderingSystem.Application.Services
             var hostDevice = session.Devices.FirstOrDefault(d => d.Role == enDeviceRole.Host);
             if (hostDevice != null)
             {
-                await _notifier.NotifyHostOfTableActivationAsync(session.TableSessionId);
+                await _notifier.NotifyHostOfTableActivationAsync(hostDevice.DeviceSessionId, session.TableSessionId);
             }
 
             return Result<TableSessionResponse>.Success(session.ToResponse());
@@ -232,9 +232,9 @@ namespace OrderingSystem.Application.Services
             // Security check: Verify the device belongs to this table session
             if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
                 return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
-
-            if (session.Orders.Count == 0)
-                return Result.Failure("No orders available for billing.", enErrorType.Validation);
+            
+            if (!session.Orders.Any(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served))
+                return Result.Failure("No approved orders available for billing.", enErrorType.Validation);
 
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
 
@@ -256,7 +256,7 @@ namespace OrderingSystem.Application.Services
                 return Result<SessionResponse>.Failure("No active table session was found.", enErrorType.NotFound);
 
             // 1. Filter out cancelled orders and flatten the items
-            var validOrders = session.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled).ToList();
+            var validOrders = session.Orders.Where(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served).ToList();
             var allOrderItems = validOrders.SelectMany(o => o.OrderItems).ToList();
 
             // 2. Consolidate matching items for the final receipt

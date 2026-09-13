@@ -1070,7 +1070,6 @@ namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/orders")]
-    [Authorize(Policy = "RequireStaff")]
     public class OrdersController : BaseController
     {
         private readonly IOrderCommandService _orderCommandService;
@@ -1095,6 +1094,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpPut("{id}/approve")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> ApproveOrder(int id)
         {
             var result = await _orderCommandService.ApproveOrderAsync(id);
@@ -1102,6 +1102,7 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpDelete("{id}/cancel")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> CancelOrder(int id)
         {
             var result = await _orderCommandService.CancelOrderAsync(id);
@@ -1121,12 +1122,15 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpGet("pending")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> GetPendingOrders([FromQuery] PageDTO page)
         {
             var result = await _orderQuery.GetPendingOrdersAsync(page);
             return HandleResult(result);
         }
+
         [HttpGet("historical-bills")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> GetHistoricalBills(
          [FromQuery] DateTime startDate,
          [FromQuery] DateTime endDate,
@@ -1200,6 +1204,14 @@ namespace OrderingSystem.WebApi.Controllers
                 );
 
                 Response.Cookies.Append("SignalRContext", signalRToken, cookieOptions);
+
+                // 3. For Flutter applications, return the token in the response body as well
+                return Ok(new
+                {
+                    tableSession = result.Value.TableSession,
+                    deviceSession = result.Value.DeviceSession,
+                    accessToken = signalRToken
+                });
             }
 
             return HandleResult(result);

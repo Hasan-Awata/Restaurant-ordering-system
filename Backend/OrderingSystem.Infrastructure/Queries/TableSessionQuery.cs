@@ -40,7 +40,7 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             var session = await _context.TableSessions
                 .AsNoTracking()
-                .Include(s => s.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled))
+                .Include(s => s.Orders.Where(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served))
                     .ThenInclude(o => o.OrderItems)
                         .ThenInclude(oi => oi.MenuItem)
                 .Include(s => s.Devices)
