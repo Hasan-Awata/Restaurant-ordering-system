@@ -159,7 +159,7 @@ namespace OrderingSystem.Application.Services
             // Process Activation
             session.Status = enSessionStatus.Active;
             await _tableSessionRepository.UpdateSessionAsync(session);
-
+            
             // Alert the Host that the menu is now unlocked
             var hostDevice = session.Devices.FirstOrDefault(d => d.Role == enDeviceRole.Host);
             if (hostDevice != null)
