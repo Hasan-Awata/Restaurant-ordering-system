@@ -18,7 +18,8 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId)
         {
             return await _context.SessionDevices
-                    .Include(ds => ds.TableSession) 
+                    .Include(ds => ds.TableSession)
+                        .ThenInclude(ts => ts.Table) 
                     .FirstOrDefaultAsync(ds => ds.DeviceSessionId == deviceSessionId);
         }
 
@@ -31,6 +32,12 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task UpdateDeviceSessionAsync(DeviceSession session)
         {
             _context.SessionDevices.Update(session);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task DeleteDeviceSessionAsync(DeviceSession session)
+        {
+            _context.SessionDevices.Remove(session);
             await _context.SaveChangesAsync();
         }
     }

@@ -12,12 +12,10 @@ namespace OrderingSystem.Application.Interfaces.MenueItem
         public Task AddMenuItemAsync(MenuItem menuItem);
         public Task UpdateMenuItemAsync(MenuItem menuItem);
         public Task<bool> DeleteMenuItemAsync(MenuItem menuItemq);
-          public Task<MenuItem?> GetMenuItemByIdAsync(int menuItemId);
+         public Task<MenuItem?> GetMenuItemByIdAsync(int menuItemId);
         public Task<bool> GetItemExistsAsync(int menuItemId);
         public  Task<bool> ItemIsExistsByNameAsync(string nameEn, string nameAr, int categoryId);
-
-
-
-
+        public Task<bool> HasActiveOrdersAsync(int menuItemId);
+        public Task<IEnumerable<MenuItem>> GetMenuItemsByIdsAsync(IEnumerable<int> menuItemIds);
     }
 }

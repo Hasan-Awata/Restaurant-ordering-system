@@ -28,10 +28,11 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task<TableSession?> GetActiveTableSessionWithOrdersAndDevicesAsync(Guid tableSessionId)
         {
             return await _context.TableSessions
-            .Include(s => s.Orders)
-                .ThenInclude(o => o.OrderItems).ThenInclude(oi => oi.MenuItem)
-            .Include(s => s.Devices)
-            .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId && s.ClosedAt == null);
+                .IgnoreQueryFilters() // Bypasses the IsDeleted filter so legacy checkout data maps correctly
+                .Include(s => s.Orders)
+                    .ThenInclude(o => o.OrderItems).ThenInclude(oi => oi.MenuItem)
+                .Include(s => s.Devices)
+                .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId && s.ClosedAt == null);
         }
 
         public async Task AddSessionAsync(TableSession session)
@@ -57,6 +58,16 @@ namespace OrderingSystem.Infrastructure.Repositories
         {
             _context.TableSessions.Remove(session);
             await _context.SaveChangesAsync();
+        }
+        
+        public async Task<List<TableSession>> GetExpiredPendingSessionsAsync(DateTime cutoffTime)
+        {
+            return await _context.TableSessions
+                .Include(s => s.Table)
+                .Where(s => s.Status == enSessionStatus.PendingActivation
+                         && s.ClosedAt == null
+                         && s.CreatedAt <= cutoffTime)
+                .ToListAsync();
         }
     }
 }

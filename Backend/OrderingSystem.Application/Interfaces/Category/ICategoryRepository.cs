@@ -16,5 +16,6 @@ namespace OrderingSystem.Application.Interfaces.Category
         public Task<Domain.Entities.Category?> GetCategoryByIdAsync(int categoryId);
         public Task<bool> GetCategoryExistsAsync(int categoryId);
          public Task<bool> CategoryIsExistsByNameAsync(string nameEn, string nameAr);
+        public Task<bool> HasActiveOrdersAsync(int categoryId);
     }
 }

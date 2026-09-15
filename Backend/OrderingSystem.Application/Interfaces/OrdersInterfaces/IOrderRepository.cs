@@ -1,12 +1,12 @@
 ﻿using OrderingSystem.Domain.Entities;
 
-namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
+public interface IOrderRepository
 {
-    public interface IOrderRepository
-    {
-        Task AddOrderAsync(Order order);
-        Task<Order?> GetOrderByIdAsync(int orderId);
-        Task UpdateOrderAsync(Order order);
-        Task DeleteOrderAsync(Order order);
-    }
+    Task AddOrderAsync(Order order);
+    Task<Order?> GetOrderByIdAsync(int orderId);
+    Task UpdateOrderAsync(Order order);
+    Task UpdateOrdersAsync(IEnumerable<Order> orders);
+    Task DeleteOrderAsync(Order order); // Soft delete
+    Task HardDeleteOrderAsync(Order order); // Hard delete
+    Task HardDeleteOrdersAsync(IEnumerable<Order> orders);
 }

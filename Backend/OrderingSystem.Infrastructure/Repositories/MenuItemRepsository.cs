@@ -3,6 +3,7 @@ using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -64,6 +65,19 @@ namespace OrderingSystem.Infrastructure.Repositories
                 .AnyAsync(m => m.CategoryId == categoryId &&
                               (m.NameEn.ToLower() == nameEn.ToLower() ||
                                m.NameAr.ToLower() == nameAr.ToLower()));
+        }
+        public async Task<bool> HasActiveOrdersAsync(int menuItemId)
+        {
+            return await _dbContext.OrderItems
+                .AnyAsync(oi => oi.MenuItemId == menuItemId &&
+                               (oi.Order.OrderStatus == enOrderStatus.Pending ||
+                                oi.Order.OrderStatus == enOrderStatus.Preparing));
+        }
+        public async Task<IEnumerable<MenuItem>> GetMenuItemsByIdsAsync(IEnumerable<int> menuItemIds)
+        {
+            return await _dbContext.MenuItems
+                .Where(m => menuItemIds.Contains(m.MenuItemId))
+                .ToListAsync();
         }
     }
 }

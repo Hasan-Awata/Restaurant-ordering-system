@@ -46,7 +46,7 @@ namespace OrderingSystem.Application.Services
 
             await _tableRepository.AddTableAsync(newTable);
 
-            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status, null);
+            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status, null, newTable.Version);
 
             return Result<TableResponse>.Success(response);
         }
@@ -69,9 +69,9 @@ namespace OrderingSystem.Application.Services
             table.FloorNumber = request.FloorNumber;
             table.Status = request.Status;
 
-            await _tableRepository.UpdateTableAsync(table);
+            await _tableRepository.UpdateTableAsync(table, request.Version);
 
-            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null);
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null, request.Version);
             return Result<TableResponse>.Success(response);
         }
 
@@ -105,7 +105,7 @@ namespace OrderingSystem.Application.Services
 
             await _tableRepository.UpdateTableAsync(table);
 
-            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null);
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null, table.Version);
             return Result<TableResponse>.Success(response);
         }
 
@@ -125,7 +125,8 @@ namespace OrderingSystem.Application.Services
                 existingTable.FloorNumber,
                 existingTable.QrCode,
                 existingTable.Status,
-                null
+                null,
+                existingTable.Version
             );
         }
     }

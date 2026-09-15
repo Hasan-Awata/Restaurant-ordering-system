@@ -22,7 +22,8 @@ public class TaxCommandService : ITaxCommandService
             return Result<TaxRecords.TaxResponse>.Failure("Names cannot be empty.");
         if (request.Amount < 0)
             return Result<TaxRecords.TaxResponse>.Failure("Amount cannot be negative.");
-
+        if (request.TaxType == enTaxType.Percentage && request.TaxScope != enTaxScope.PerBill)
+            return Result<TaxRecords.TaxResponse>.Failure("Percentage taxes can only be applied to the entire bill.", enErrorType.Validation);
         if (await _taxRepository.TaxExistsByNameAsync(request.NameEn, request.NameAr))
             return Result<TaxRecords.TaxResponse>.Failure("A tax with this name already exists.", enErrorType.Conflict);
 
@@ -39,6 +40,9 @@ public class TaxCommandService : ITaxCommandService
         var tax = await _taxRepository.GetTaxByIdAsync(request.TaxId);
         if (tax == null) return Result<TaxRecords.TaxResponse>.Failure("Tax not found.", enErrorType.NotFound);
 
+        if (request.TaxType == enTaxType.Percentage && request.TaxScope != enTaxScope.PerBill)
+            return Result<TaxRecords.TaxResponse>.Failure("Percentage taxes can only be applied to the entire bill.", enErrorType.Validation);
+        
         tax.NameAr = request.NameAr;
         tax.NameEn = request.NameEn;
         tax.Amount = request.Amount;

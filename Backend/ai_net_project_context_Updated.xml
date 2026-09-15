@@ -168,8 +168,7 @@
 │   ├── Seeding
 │   │   └── DatabaseSeeder.cs
 │   └── signalr-test.html
-├── ai_net_project_context.xml
-└── ai_net_project_context_Updated.xml
+└── ai_net_project_context.xml
   </directory_structure>
 </project_context>
 
@@ -277,14 +276,13 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("DynamicRestaurantPolicy", httpContext =>
     {
-        // 1. Primary Secure Approach: Extract from the validated JWT Claims
-        var sessionId = httpContext.User.FindFirst("DeviceSessionId")?.Value;
-        var hasDeviceSession = !string.IsNullOrWhiteSpace(sessionId);
+        // 1. Check if the user is already authenticated via device session
+        var hasDeviceSession = httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var sessionId);
 
-        // 2. Web Fallback: Try to read from Cookies (Standard Browsers)
-        if (!hasDeviceSession && httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue))
+        // Fallback: Check the Safari specific header if the cookie was dropped
+        if (string.IsNullOrWhiteSpace(sessionId) && httpContext.Request.Headers.TryGetValue("x-device-session-id", out var headerSessionId))
         {
-            sessionId = cookieValue;
+            sessionId = headerSessionId.ToString();
             hasDeviceSession = true;
         }
 
@@ -297,20 +295,20 @@ builder.Services.AddRateLimiter(options =>
                     PermitLimit = 150,
                     Window = TimeSpan.FromMinutes(1),
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                    QueueLimit = 10
+                    QueueLimit = 10 // Increased queue to absorb brief network reconnects
                 });
         }
 
-        // 3. Anonymous Request: IP-based partition
+        // 2. Anonymous Request: IP-based partition (Shared Restaurant Wi-Fi)
         var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? httpContext.TraceIdentifier;
 
         return RateLimitPartition.GetFixedWindowLimiter(ip, _ =>
             new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 1000,
+                PermitLimit = 1000, // Massive threshold to account for NAT/Shared Wi-Fi
                 Window = TimeSpan.FromMinutes(1),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 50
+                QueueLimit = 50 // Large queue to prevent dropping legitimate new connections
             });
     });
 
@@ -548,9 +546,11 @@ else
     app.UseCors("ProductionPolicy");
 }
 
+// Ensure the Rate Limiter middleware is explicitly called so the partition logic executes
+app.UseRateLimiter();
+
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseRateLimiter();
 
 app.MapControllers().RequireRateLimiting("DynamicRestaurantPolicy");
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
@@ -2384,9 +2384,6 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyTaxesUpdatedAsync();
         public Task NotifyGuestOfRejectionAsync(Guid guestDeviceSessionId);
         public Task NotifyCashiersOfZombieSessionClearedAsync(Guid tableSessionId);
-        public Task NotifyCashiersOfOrderSyncAsync(int orderId, enOrderStatus status);
-        public Task NotifyCashiersOfTableSessionSyncAsync(Guid tableSessionId, enSessionStatus status);
-        public Task NotifyCashiersOfBillSyncAsync(Guid tableSessionId);
     }
 }
 </file>
@@ -2417,9 +2414,6 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveTaxesUpdated(string message);
         public Task ReceiveHostRejectionNotification(string message);
         public Task ReceiveZombieSessionCleared(Guid tableSessionId, string message);
-        public Task ReceiveCashierOrderSync(int orderId, enOrderStatus status, string message);
-        public Task ReceiveCashierTableSessionSync(Guid tableSessionId, enSessionStatus status, string message);
-        public Task ReceiveCashierBillSync(Guid tableSessionId, string message);
     }
 }
 </file>
@@ -3594,9 +3588,6 @@ namespace OrderingSystem.Application.Services
             // Notify Customer
             await _notifier.NotifyCustomerOfOrderStatusAsync(order.DeviceSessionId, order.OrderId, order.OrderStatus);
 
-            // Notify Cashier
-            await _notifier.NotifyCashiersOfOrderSyncAsync(order.OrderId, order.OrderStatus);
-
             return Result<bool>.Success(true);
         }
 
@@ -3634,7 +3625,6 @@ namespace OrderingSystem.Application.Services
 
             // 4. Notification
             await _notifier.NotifyCashiersOfCustomerCancellationAsync(order.OrderId, order.TableSessionId);
-            await _notifier.NotifyCashiersOfOrderSyncAsync(order.OrderId, order.OrderStatus);
 
             return Result<bool>.Success(true);
         }
@@ -3843,8 +3833,6 @@ namespace OrderingSystem.Application.Services
                 await _notifier.NotifyHostOfTableActivationAsync(hostDevice.DeviceSessionId, session.TableSessionId);
             }
 
-            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, session.Status);
-
             return Result<TableSessionResponse>.Success(session.ToResponse());
         }
 
@@ -3900,8 +3888,6 @@ namespace OrderingSystem.Application.Services
             });
 
             RevokeSessionInCache(tableSessionId);
-
-            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
 
             return Result.Success();
         }
@@ -4001,7 +3987,6 @@ namespace OrderingSystem.Application.Services
 
             RevokeSessionInCache(tableSessionId);
             await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
-            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
         }
@@ -4053,7 +4038,6 @@ namespace OrderingSystem.Application.Services
             }
 
             await _notifier.NotifyCustomerOfBillRejectedAsync(tableSessionId);
-            await _notifier.NotifyCashiersOfBillSyncAsync(tableSessionId);
 
             return Result.Success();
         }
@@ -4188,7 +4172,6 @@ namespace OrderingSystem.Application.Services
             table.TableNumber = request.TableNumber;
             table.FloorNumber = request.FloorNumber;
             table.Status = request.Status;
-            table.Version = request.Version;
 
             await _tableRepository.UpdateTableAsync(table);
 
@@ -5315,21 +5298,6 @@ namespace OrderingSystem.Infrastructure.Notifications
             await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
                 .ReceiveZombieSessionCleared(tableSessionId, "A pending session expired and was automatically cleared.");
         }
-        public async Task NotifyCashiersOfOrderSyncAsync(int orderId, enOrderStatus status)
-        {
-            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
-                .ReceiveCashierOrderSync(orderId, status, $"Order #{orderId} status changed to {status}.");
-        }
-        public async Task NotifyCashiersOfTableSessionSyncAsync(Guid tableSessionId, enSessionStatus status)
-        {
-            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
-                .ReceiveCashierTableSessionSync(tableSessionId, status, $"Table session status changed to {status}.");
-        }
-        public async Task NotifyCashiersOfBillSyncAsync(Guid tableSessionId)
-        {
-            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
-                .ReceiveCashierBillSync(tableSessionId, "The bill request was processed by another cashier.");
-        }
     }
 }
 </file>
@@ -6240,8 +6208,6 @@ namespace OrderingSystem.Infrastructure.Queries
             var guestBills = new List<GuestBillResponse>();
             int totalItemsCount = 0;
 
-            var approvedGuestsCount = session.Devices.Count(d => d.IsApproved);
-
             foreach (var device in session.Devices)
             {
                 var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
@@ -6275,12 +6241,7 @@ namespace OrderingSystem.Infrastructure.Queries
                 totalSubTotal += guestSubTotal;
 
                 // --- 3. CALCULATE SPLIT TOTALS & PASS TO CONSTRUCTOR ---
-                decimal guestTax = _taxCalculationService.CalculateGuestTaxAmount(
-                                    guestSubTotal,
-                                    guestItemsCount,
-                                    approvedGuestsCount,
-                                    activeTaxes);
-
+                decimal guestTax = _taxCalculationService.CalculateGuestTaxAmount(guestSubTotal, guestItemsCount, session.Devices.Count, activeTaxes);
                 decimal guestGrandTotal = guestSubTotal + guestTax;
 
                 guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, billItems, guestSubTotal, guestTax, guestGrandTotal));
@@ -6288,7 +6249,7 @@ namespace OrderingSystem.Infrastructure.Queries
 
             var uniqueGuests = session.Devices.Count;
 
-            var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, approvedGuestsCount, totalItemsCount, activeTaxes);
+            var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, uniqueGuests, totalItemsCount, activeTaxes);
             var grandTotal = totalSubTotal + taxResult.TotalTaxAmount;
 
             return new BillSummaryResponse(
@@ -6669,8 +6630,7 @@ namespace OrderingSystem.Infrastructure.Repositories
         {
             return await _context.Orders
                 .Include(o => o.OrderItems)
-                    .ThenInclude(oi => oi.MenuItem)
-                .Include(o => o.Device)
+                .ThenInclude(oi => oi.MenuItem)
                 .FirstOrDefaultAsync(o => o.OrderId == orderId);
         }
 

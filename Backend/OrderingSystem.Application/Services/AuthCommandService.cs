@@ -37,6 +37,7 @@ namespace OrderingSystem.Application.Services
 
             user.RefreshToken = refreshToken;
             user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            user.AbsoluteRefreshTokenExpiryTime = DateTime.UtcNow.AddDays(30); 
             await _userRepository.UpdateUserAsync(user);
 
             var response = new LoginResponse(token, refreshToken, expiryTime, user.FullName, user.Role);
@@ -151,6 +152,21 @@ namespace OrderingSystem.Application.Services
         {
             var user = await _userRepository.GetUserByIdAsync(userId);
             if (user == null) return Result<bool>.Failure("User not found.", enErrorType.NotFound);
+
+            if (!string.IsNullOrWhiteSpace(request.NewPassword))
+            {
+                if (string.IsNullOrWhiteSpace(request.CurrentPassword))
+                    return Result<bool>.Failure("Current password is required to set a new password.", enErrorType.Validation);
+
+                if (!BCrypt.Net.BCrypt.EnhancedVerify(request.CurrentPassword, user.PasswordHash))
+                    return Result<bool>.Failure("Invalid current password.", enErrorType.Validation);
+
+                user.PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(request.NewPassword);
+            }
+            else if (!string.IsNullOrWhiteSpace(request.CurrentPassword))
+            {
+                return Result<bool>.Failure("New password is required if you are providing your current password.", enErrorType.Validation);
+            }
 
             if (!string.IsNullOrWhiteSpace(request.CurrentPassword) && !string.IsNullOrWhiteSpace(request.NewPassword))
             {

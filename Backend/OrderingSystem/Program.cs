@@ -10,6 +10,7 @@ using OrderingSystem.Application.Interfaces.Auth;
 using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.Bills;
 using OrderingSystem.Application.Interfaces.Category;
+using OrderingSystem.Application.Interfaces.Data;
 using OrderingSystem.Application.Interfaces.MenueItem; 
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
@@ -40,8 +41,6 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpLogging(logging =>
 {
     logging.LoggingFields = HttpLoggingFields.All;
-    // Scrub the JWT token from the logs
-    logging.RequestHeaders.Add("Authorization");
     logging.MediaTypeOptions.AddText("application/json");
     // This is the critical line:
     logging.CombineLogs = true;
@@ -65,8 +64,16 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("DynamicRestaurantPolicy", httpContext =>
     {
-        // 1. Check if the user is already authenticated via device session
-        var hasDeviceSession = httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var sessionId);
+        // 1. Primary Secure Approach: Extract from the validated JWT Claims
+        var sessionId = httpContext.User.FindFirst("DeviceSessionId")?.Value;
+        var hasDeviceSession = !string.IsNullOrWhiteSpace(sessionId);
+
+        // 2. Web Fallback: Try to read from Cookies (Standard Browsers)
+        if (!hasDeviceSession && httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue))
+        {
+            sessionId = cookieValue;
+            hasDeviceSession = true;
+        }
 
         if (hasDeviceSession && !string.IsNullOrWhiteSpace(sessionId))
         {
@@ -74,23 +81,23 @@ builder.Services.AddRateLimiter(options =>
             return RateLimitPartition.GetFixedWindowLimiter(sessionId, _ =>
                 new FixedWindowRateLimiterOptions
                 {
-                    PermitLimit = 150, 
+                    PermitLimit = 150,
                     Window = TimeSpan.FromMinutes(1),
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                    QueueLimit = 10 // Increased queue to absorb brief network reconnects
+                    QueueLimit = 10
                 });
         }
 
-        // 2. Anonymous Request: IP-based partition (Shared Restaurant Wi-Fi)
+        // 3. Anonymous Request: IP-based partition
         var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? httpContext.TraceIdentifier;
 
         return RateLimitPartition.GetFixedWindowLimiter(ip, _ =>
             new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 1000, // Massive threshold to account for NAT/Shared Wi-Fi
+                PermitLimit = 1000,
                 Window = TimeSpan.FromMinutes(1),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 50 // Large queue to prevent dropping legitimate new connections
+                QueueLimit = 50
             });
     });
 
@@ -148,11 +155,16 @@ builder.Services.AddHealthChecks()
 
 // ── Dependency Injections ──────────────────────────────────────────────────
 // Register the Global Exception Handler and standard Problem Details
+builder.Services.AddSingleton<IDatabaseErrorMapper, PostgresErrorMapper>();
 builder.Services.AddExceptionHandler<OrderingSystem.WebApi.Middleware.GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
 
+builder.Services.AddHostedService<OrderingSystem.BackgroundServices.ZombieSessionCleanupWorker>();
+
 builder.Services.AddSignalR();
 builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
+
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
 builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
@@ -206,21 +218,16 @@ builder.Services.AddAuthentication(options =>
     {
         OnMessageReceived = context =>
         {
-            var path = context.HttpContext.Request.Path;
-
-            if (path.StartsWithSegments("/hubs"))
+            // 1. Staff query string extraction (for Swagger/SignalR)
+            var accessToken = context.Request.Query["access_token"];
+            if (!string.IsNullOrEmpty(accessToken))
             {
-                // 1. Staff query string extraction
-                var accessToken = context.Request.Query["access_token"];
-                if (!string.IsNullOrEmpty(accessToken))
-                {
-                    context.Token = accessToken;
-                }
-                // 2. Customer cookie extraction
-                else if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
-                {
-                    context.Token = cookieToken;
-                }
+                context.Token = accessToken;
+            }
+            // 2. Customer cookie extraction (NOW APPLIES GLOBALLY)
+            else if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
+            {
+                context.Token = cookieToken;
             }
 
             return Task.CompletedTask;
@@ -248,7 +255,20 @@ builder.Services.AddAuthentication(options =>
             }
 
             return Task.CompletedTask;
-        }
+        },
+
+        OnAuthenticationFailed = context =>
+        {
+            if (context.Exception is SecurityTokenExpiredException)
+            {
+                var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                logger.LogWarning("JWT Token expired for user connection.");
+
+                // Appends a header so the frontend interceptors can catch it on HTTP requests or negotiation
+                context.Response.Headers.Append("Token-Expired", "true");
+            }
+            return Task.CompletedTask;
+        },
     };
 });
 
@@ -292,7 +312,10 @@ builder.Services.AddCors(options =>
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
-app.UseHttpLogging(); 
+// Inject forwarded headers immediately to resolve the correct client IP
+app.UseForwardedHeaders();
+
+app.UseHttpLogging();
 app.UseExceptionHandler();
 
 if (app.Environment.IsDevelopment())
@@ -312,8 +335,11 @@ else
     app.UseCors("ProductionPolicy");
 }
 
+
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
+
 app.MapControllers().RequireRateLimiting("DynamicRestaurantPolicy"); 
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 app.MapHealthChecks("/api/health");

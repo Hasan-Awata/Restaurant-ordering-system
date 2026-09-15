@@ -41,7 +41,8 @@ namespace OrderingSystem.Application.Services
 
                 if (taxAmount > 0)
                 {
-                    var roundedAmount = Math.Round(taxAmount, 2);
+                    // Standard rounding away from zero
+                    var roundedAmount = Math.Round(taxAmount, 2, MidpointRounding.AwayFromZero);
                     appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, roundedAmount));
                     totalTaxAmount += roundedAmount;
                 }
@@ -66,7 +67,8 @@ namespace OrderingSystem.Application.Services
                     else if (tax.TaxScope == enTaxScope.PerGuest) taxAmount = tax.Amount; // Their guest fee
                     else if (tax.TaxScope == enTaxScope.PerItem) taxAmount = tax.Amount * guestItemsCount; // Their items
                 }
-                guestTaxAmount += Math.Round(taxAmount, 2);
+
+                guestTaxAmount += Math.Round(taxAmount, 2, MidpointRounding.AwayFromZero);
             }
             return guestTaxAmount;
         }

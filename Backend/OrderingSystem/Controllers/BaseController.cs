@@ -33,14 +33,21 @@ namespace OrderingSystem.WebApi.Controllers.Base
         {
             get
             {
-                // 1. Try to read the device session from the Cookies (default for most browsers)
+                // 1. Primary Secure Approach: Extract from the validated JWT Claims
+                var sessionClaim = User.FindFirst("DeviceSessionId")?.Value;
+                if (!string.IsNullOrEmpty(sessionClaim) && Guid.TryParse(sessionClaim, out var claimSessionId))
+                {
+                    return claimSessionId;
+                }
+
+                // 2. Web Fallback: Try to read from Cookies (Standard Browsers)
                 if (Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) &&
                     Guid.TryParse(cookieValue, out var deviceSessionId))
                 {
                     return deviceSessionId;
                 }
 
-                // 2. Try to read from the Header (fallback for iPhone/Safari)
+                // 3. Manual Header Fallback (Legacy Safari workaround)
                 if (Request.Headers.TryGetValue("x-device-session-id", out var headerValue) &&
                     Guid.TryParse(headerValue, out var headerSessionId))
                 {

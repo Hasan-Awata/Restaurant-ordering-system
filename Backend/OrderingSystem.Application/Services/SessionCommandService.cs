@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Caching.Memory;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Bills;
+using OrderingSystem.Application.Interfaces.Data;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
@@ -11,6 +12,10 @@ using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace OrderingSystem.Application.Services
 {
@@ -23,8 +28,9 @@ namespace OrderingSystem.Application.Services
         private readonly ITaxRepository _taxRepository;
         private readonly ITaxCalculationService _taxCalculationService;
         private readonly IBillRepository _billRepository;
+        private readonly IUnitOfWork _unitOfWork;
         private readonly IRealTimeNotifier _notifier;
-        private readonly IMemoryCache _cache; 
+        private readonly IMemoryCache _cache;
 
         public SessionCommandService(
             ITableSessionRepository tableSessionRepository,
@@ -34,6 +40,7 @@ namespace OrderingSystem.Application.Services
             ITaxRepository taxRepository,
             ITaxCalculationService taxCalculationService,
             IBillRepository billRepository,
+            IUnitOfWork unitOfWork,
             IRealTimeNotifier notifier,
             IMemoryCache cache)
         {
@@ -44,6 +51,7 @@ namespace OrderingSystem.Application.Services
             _taxRepository = taxRepository;
             _taxCalculationService = taxCalculationService;
             _billRepository = billRepository;
+            _unitOfWork = unitOfWork;
             _notifier = notifier;
             _cache = cache;
         }
@@ -55,6 +63,17 @@ namespace OrderingSystem.Application.Services
             if (table == null)
             {
                 return Result<SessionResponse>.Failure("Table was not found.", enErrorType.NotFound);
+            }
+
+            if (table.Status == enTableStatus.Billing)
+            {
+                var billingSession = table.Sessions.FirstOrDefault(s => s.ClosedAt == null);
+                if (billingSession != null && deviceSessionId.HasValue && billingSession.Devices.Any(d => d.DeviceSessionId == deviceSessionId.Value))
+                {
+                    return AccessTableSessionAsync(billingSession, deviceSessionId.Value);
+                }
+
+                return Result<SessionResponse>.Failure("This table is currently processing payment. Please wait until it is cleared.", enErrorType.Conflict);
             }
 
             var activeSession = table.Sessions.FirstOrDefault(s => s.ClosedAt == null && s.Status != enSessionStatus.Closed);
@@ -69,11 +88,32 @@ namespace OrderingSystem.Application.Services
                 return await JoinTableSessionAsync(activeSession, Guid.CreateVersion7());
             }
 
-            table.Status = enTableStatus.Occupied;
+            try
+            {
+                Result<SessionResponse>? activationResult = null;
 
-            await _tableRepository.UpdateTableAsync(table);
+                // --- Transaction Wrapper Added ---
+                await _unitOfWork.ExecuteTransactionAsync(async () =>
+                {
+                    table.Status = enTableStatus.Occupied;
+                    await _tableRepository.UpdateTableAsync(table);
+                    activationResult = await ActivateTableSessionAsync(table.TableId, deviceSessionId ?? Guid.CreateVersion7());
+                });
 
-            return await ActivateTableSessionAsync(table.TableId, Guid.CreateVersion7());
+                return activationResult!;
+            }
+            catch (Exception)
+            {
+                var refreshedTable = await _tableSessionRepository.GetTableWithActiveSessionAsync(qrCode);
+                var newActiveSession = refreshedTable?.Sessions.FirstOrDefault(s => s.ClosedAt == null && s.Status != enSessionStatus.Closed);
+
+                if (newActiveSession != null)
+                {
+                    return await JoinTableSessionAsync(newActiveSession, deviceSessionId ?? Guid.CreateVersion7());
+                }
+
+                throw;
+            }
         }
 
         private async Task<Result<SessionResponse>> ActivateTableSessionAsync(int tableId, Guid deviceSessionId)
@@ -96,10 +136,7 @@ namespace OrderingSystem.Application.Services
                 TableSession = tableSession,
             };
 
-            // Optimization: EF Core Graph Insertion. 
-            // Saving the DeviceSession automatically saves the attached TableSession! (1 Round Trip)
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
-
             await _notifier.NotifyCashiersOfActivationAsync(tableId, tableSession.TableSessionId);
 
             return Result<SessionResponse>.Success(tableSession.ToResponse(deviceSession));
@@ -116,16 +153,13 @@ namespace OrderingSystem.Application.Services
             };
 
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
-
             await _notifier.NotifyHostOfGuestJoinAsync(tableSession.TableSessionId, deviceSessionId);
 
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(tableSession, deviceSession));
         }
 
-        // Changed from 'async Task' to synchronous 'Result' because we no longer query the DB here!
         private Result<SessionResponse> AccessTableSessionAsync(TableSession activeSession, Guid deviceSessionId)
         {
-            // Search for the device in the list we already loaded into memory
             var deviceSession = activeSession.Devices.FirstOrDefault(d => d.DeviceSessionId == deviceSessionId);
 
             if (deviceSession == null)
@@ -138,7 +172,6 @@ namespace OrderingSystem.Application.Services
 
         private void RevokeSessionInCache(Guid tableSessionId)
         {
-            // Retain revocation flag for 4 hours to match JWT lifespan
             _cache.Set($"revoked_table_session_{tableSessionId}", true, TimeSpan.FromHours(4));
         }
 
@@ -156,16 +189,16 @@ namespace OrderingSystem.Application.Services
                 return Result<TableSessionResponse>.Failure("Session is not pending activation.", enErrorType.Conflict);
             }
 
-            // Process Activation
             session.Status = enSessionStatus.Active;
             await _tableSessionRepository.UpdateSessionAsync(session);
-            
-            // Alert the Host that the menu is now unlocked
+
             var hostDevice = session.Devices.FirstOrDefault(d => d.Role == enDeviceRole.Host);
             if (hostDevice != null)
             {
                 await _notifier.NotifyHostOfTableActivationAsync(hostDevice.DeviceSessionId, session.TableSessionId);
             }
+
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, session.Status);
 
             return Result<TableSessionResponse>.Success(session.ToResponse());
         }
@@ -176,10 +209,8 @@ namespace OrderingSystem.Application.Services
             if (guestDeviceSession == null)
                 return Result<SessionResponse>.Failure("Device session not found.", enErrorType.NotFound);
 
-            // Fetch the host's session to verify authority
             var hostDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(hostDeviceSessionId);
 
-            // Validate role and table session match
             if (hostDeviceSession == null ||
                 hostDeviceSession.Role != enDeviceRole.Host ||
                 hostDeviceSession.TableSessionId != guestDeviceSession.TableSessionId)
@@ -200,25 +231,32 @@ namespace OrderingSystem.Application.Services
             if (session == null)
                 return Result.Failure("No active table session was found.", enErrorType.NotFound);
 
-            if (session.Orders != null && session.Orders.Any())
+            if (session.Orders != null && session.Orders.Any(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served))
             {
-                foreach (var order in session.Orders.ToList())
+                return Result.Failure("Cannot deactivate session: Active orders are being prepared or served.", enErrorType.Conflict);
+            }
+
+            // --- Transaction Wrapper Added ---
+            await _unitOfWork.ExecuteTransactionAsync(async () =>
+            {
+                if (session.Orders != null && session.Orders.Any())
                 {
-                    await _orderRepository.DeleteOrderAsync(order);
+                    await _orderRepository.HardDeleteOrdersAsync(session.Orders);
                 }
-            }
 
-            await _tableSessionRepository.DeleteSessionAsync(session);
+                await _tableSessionRepository.DeleteSessionAsync(session);
 
-            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
-            if (table != null)
-            {
-                table.Status = enTableStatus.Available;
-                await _tableRepository.UpdateTableAsync(table);
-            }
+                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                if (table != null)
+                {
+                    table.Status = enTableStatus.Available;
+                    await _tableRepository.UpdateTableAsync(table);
+                }
+            });
 
-            // Revoke stateless tokens for this session
             RevokeSessionInCache(tableSessionId);
+
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
 
             return Result.Success();
         }
@@ -229,18 +267,15 @@ namespace OrderingSystem.Application.Services
             if (session == null)
                 return Result.Failure("No active table session was found.", enErrorType.NotFound);
 
-            // Security check: Verify the device belongs to this table session
             if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
                 return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
-            
+
             if (!session.Orders.Any(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served))
                 return Result.Failure("No approved orders available for billing.", enErrorType.Validation);
 
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
 
-            // This acts as the single "AcceptPayment" notification to the cashier
             await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
-
             await _notifier.NotifyGuestsOfBillRequestAsync(tableSessionId);
 
             table.Status = enTableStatus.Billing;
@@ -255,11 +290,9 @@ namespace OrderingSystem.Application.Services
             if (session == null)
                 return Result<SessionResponse>.Failure("No active table session was found.", enErrorType.NotFound);
 
-            // 1. Filter out cancelled orders and flatten the items
             var validOrders = session.Orders.Where(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served).ToList();
             var allOrderItems = validOrders.SelectMany(o => o.OrderItems).ToList();
 
-            // 2. Consolidate matching items for the final receipt
             var consolidatedItems = allOrderItems
                 .GroupBy(oi => new { oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.UnitPrice })
                 .Select(g => new BillItem
@@ -272,15 +305,14 @@ namespace OrderingSystem.Application.Services
                     TotalPrice = g.Key.UnitPrice * g.Sum(oi => oi.Quantity)
                 }).ToList();
 
-            // 3. Perform Tax Calculations using your existing service
             decimal totalSubTotal = consolidatedItems.Sum(i => i.TotalPrice);
             int totalItemsCount = consolidatedItems.Sum(i => i.Quantity);
-            int uniqueGuestsCount = session.Devices.Count;
+
+            int uniqueGuestsCount = session.Devices.Count(d => d.IsApproved);
 
             var activeTaxes = await _taxRepository.GetActiveTaxesAsync();
             var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, uniqueGuestsCount, totalItemsCount, activeTaxes);
 
-            // 4. Create the Immutable Snapshot (The Bill)
             var finalBill = new Bill
             {
                 TableSessionId = session.TableSessionId,
@@ -297,30 +329,34 @@ namespace OrderingSystem.Application.Services
                 }).ToList()
             };
 
-            // Save the bill snapshot to the database
-            await _billRepository.AddBillAsync(finalBill);
-
-            // 5. Proceed with closing the session (Your existing logic)
-            session.Status = enSessionStatus.Closed;
-            session.ClosedAt = DateTime.UtcNow;
-
-            foreach (var order in validOrders)
+            // --- Transaction Wrapper Maintained ---
+            await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
-                order.OrderStatus = enOrderStatus.Served;
-                await _orderRepository.UpdateOrderAsync(order);
-            }
+                await _billRepository.AddBillAsync(finalBill);
 
-            await _tableSessionRepository.UpdateSessionAsync(session);
+                session.Status = enSessionStatus.Closed;
+                session.ClosedAt = DateTime.UtcNow;
 
-            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
-            if (table != null)
-            {
-                table.Status = enTableStatus.Available;
-                await _tableRepository.UpdateTableAsync(table);
-            }
+                foreach (var order in validOrders) order.OrderStatus = enOrderStatus.Served;
+                await _orderRepository.UpdateOrdersAsync(validOrders);
+
+                var orphanedPendingOrders = session.Orders.Where(o => o.OrderStatus == enOrderStatus.Pending).ToList();
+                foreach (var orphaned in orphanedPendingOrders) orphaned.OrderStatus = enOrderStatus.Cancelled;
+                if (orphanedPendingOrders.Any()) await _orderRepository.UpdateOrdersAsync(orphanedPendingOrders);
+
+                await _tableSessionRepository.UpdateSessionAsync(session);
+
+                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                if (table != null)
+                {
+                    table.Status = enTableStatus.Available;
+                    await _tableRepository.UpdateTableAsync(table);
+                }
+            });
 
             RevokeSessionInCache(tableSessionId);
             await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
         }
@@ -334,20 +370,22 @@ namespace OrderingSystem.Application.Services
             if (session.Status != enSessionStatus.PendingActivation)
                 return Result.Failure("Session is not pending activation.", enErrorType.Conflict);
 
-            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
-            if (table != null)
+            // --- Transaction Wrapper Added ---
+            await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
-                table.Status = enTableStatus.Available;
-                await _tableRepository.UpdateTableAsync(table);
-            }
+                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                if (table != null)
+                {
+                    table.Status = enTableStatus.Available;
+                    await _tableRepository.UpdateTableAsync(table);
+                }
+
+                session.Status = enSessionStatus.Closed;
+                session.ClosedAt = DateTime.UtcNow;
+                await _tableSessionRepository.UpdateSessionAsync(session);
+            });
 
             await _notifier.NotifyCustomerOfActivationDismissedAsync(tableSessionId);
-
-            session.Status = enSessionStatus.Closed;
-            session.ClosedAt = DateTime.UtcNow;
-            await _tableSessionRepository.UpdateSessionAsync(session);
-
-            // Revoke stateless tokens for this session
             RevokeSessionInCache(tableSessionId);
 
             return Result.Success();
@@ -370,6 +408,63 @@ namespace OrderingSystem.Application.Services
             }
 
             await _notifier.NotifyCustomerOfBillRejectedAsync(tableSessionId);
+            await _notifier.NotifyCashiersOfBillSyncAsync(tableSessionId);
+
+            return Result.Success();
+        }
+
+        public async Task<Result> CleanupZombieSessionsAsync(TimeSpan expirationWindow)
+        {
+            var cutoffTime = DateTime.UtcNow.Subtract(expirationWindow);
+            var expiredSessions = await _tableSessionRepository.GetExpiredPendingSessionsAsync(cutoffTime);
+
+            if (!expiredSessions.Any())
+                return Result.Success();
+
+            foreach (var session in expiredSessions)
+            {
+                // --- Transaction Wrapper Added (Per-Session) ---
+                await _unitOfWork.ExecuteTransactionAsync(async () =>
+                {
+                    session.Status = enSessionStatus.Closed;
+                    session.ClosedAt = DateTime.UtcNow;
+
+                    if (session.Table != null)
+                    {
+                        session.Table.Status = enTableStatus.Available;
+                        await _tableRepository.UpdateTableAsync(session.Table);
+                    }
+
+                    await _tableSessionRepository.UpdateSessionAsync(session);
+                });
+
+                await _notifier.NotifyCustomerOfActivationDismissedAsync(session.TableSessionId);
+                await _notifier.NotifyCashiersOfZombieSessionClearedAsync(session.TableSessionId);
+
+                RevokeSessionInCache(session.TableSessionId);
+            }
+
+            return Result.Success();
+        }
+
+        public async Task<Result> RejectJoiningRequestAsync(Guid guestDeviceSessionId, Guid hostDeviceSessionId)
+        {
+            var guestDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(guestDeviceSessionId);
+            if (guestDeviceSession == null)
+                return Result.Failure("Device session not found.", enErrorType.NotFound);
+
+            var hostDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(hostDeviceSessionId);
+
+            if (hostDeviceSession == null ||
+                hostDeviceSession.Role != enDeviceRole.Host ||
+                hostDeviceSession.TableSessionId != guestDeviceSession.TableSessionId)
+            {
+                return Result.Failure("Unauthorized to reject guests for this table.", enErrorType.Unauthorized);
+            }
+
+            // Terminate the session and notify the guest
+            await _deviceSessionRepository.DeleteDeviceSessionAsync(guestDeviceSession);
+            await _notifier.NotifyGuestOfRejectionAsync(guestDeviceSession.DeviceSessionId);
 
             return Result.Success();
         }

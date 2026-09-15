@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration; 
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
@@ -18,11 +19,33 @@ namespace OrderingSystem.Infrastructure.Queries
     {
         private readonly OrderingSystemDbContext _context;
         private readonly ITaxCalculationService _taxCalculationService;
+        private readonly IConfiguration _config; 
 
-        public OrderQuery(OrderingSystemDbContext context, ITaxCalculationService taxCalculationService)
+        public OrderQuery(OrderingSystemDbContext context, ITaxCalculationService taxCalculationService, IConfiguration config)
         {
             _context = context;
             _taxCalculationService = taxCalculationService;
+            _config = config;
+        }
+
+        // دالة مساعدة لحساب بداية ونهاية اليوم المحلي بدقة وتحويلها لـ UTC
+        private (DateTime StartUtc, DateTime EndUtc) GetLocalDayBoundsUtc()
+        {
+            // سحب المنطقة الزمنية من الإعدادات، مع وضع دمشق كقيمة افتراضية للحماية
+            var tzId = _config["RestaurantSettings:TimeZoneId"] ?? "Asia/Damascus";
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
+
+            // حساب الوقت المحلي الآن
+            var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+
+            // تصفير الوقت للحصول على منتصف الليل المحلي (بداية اليوم)
+            var localStartOfDay = localNow.Date;
+
+            // تحويل البداية والنهاية إلى UTC لاستخدامها في البحث
+            var startUtc = TimeZoneInfo.ConvertTimeToUtc(localStartOfDay, tz);
+            var endUtc = startUtc.AddDays(1);
+
+            return (startUtc, endUtc);
         }
 
         public async Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page)
@@ -62,11 +85,13 @@ namespace OrderingSystem.Infrastructure.Queries
 
         public async Task<Result<List<OrderRecords.OrderItemResponse>>> GetTopThreeItemsTodayAsync()
         {
-            var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
+            var bounds = GetLocalDayBoundsUtc();
 
             var rawItems = await _context.OrderItems
                 .AsNoTracking()
-                .Where(oi => oi.Order.CreatedAt.Date == today && oi.Order.OrderStatus != enOrderStatus.Cancelled)
+                .Where(oi => oi.Order.CreatedAt >= bounds.StartUtc &&
+                             oi.Order.CreatedAt < bounds.EndUtc &&
+                             oi.Order.OrderStatus != enOrderStatus.Cancelled)
                 .Where(oi => !oi.MenuItem.IsDeleted)
                 .GroupBy(oi => new
                 {
@@ -119,10 +144,10 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             try
             {
-                var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
+                var bounds = GetLocalDayBoundsUtc();
 
                 var count = await _context.Orders
-                    .Where(o => o.CreatedAt.Date == today)
+                    .Where(o => o.CreatedAt >= bounds.StartUtc && o.CreatedAt < bounds.EndUtc)
                     .CountAsync();
 
                 return Result<int>.Success(count);
@@ -161,7 +186,7 @@ namespace OrderingSystem.Infrastructure.Queries
                         oi.UnitPrice,
                         oi.Notes
                     )).ToList()
-                )) 
+                ))
                 .ToListAsync();
 
             var pagedResponse = new PagedResponse<OrderRecords.OrderResponse>(items, totalRecords, page.PageNumber, page.PageSize);
@@ -171,6 +196,7 @@ namespace OrderingSystem.Infrastructure.Queries
         public async Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(DateTime startDate, DateTime endDate, PageDTO page)
         {
             var query = _context.Bills
+                .IgnoreQueryFilters()
                 .Include(b => b.TableSession)
                     .ThenInclude(ts => ts.Table)
                 .Include(b => b.BillItems)
@@ -185,7 +211,7 @@ namespace OrderingSystem.Infrastructure.Queries
                 .ToListAsync();
 
             var responseData = bills.Select(b => new HistoricalBillResponse(
-                OrderId: b.BillId, 
+                OrderId: b.BillId,
                 TableNumber: b.TableSession.Table.TableNumber,
                 TableSessionId: b.TableSessionId.ToString(),
                 Status: "Closed",

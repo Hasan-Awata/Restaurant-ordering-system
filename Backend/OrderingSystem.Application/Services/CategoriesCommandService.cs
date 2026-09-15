@@ -112,6 +112,14 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<bool>.Failure($"Category with ID {request.CategoryId} not found.", enErrorType.NotFound);
             }
+            
+            bool hasActiveOrders = await _categoryRepository.HasActiveOrdersAsync(request.CategoryId);
+            if (hasActiveOrders)
+            {
+                return Result<bool>.Failure(
+                    "Cannot delete this category because it contains menu items that are currently part of active orders being prepared.",
+                    enErrorType.Conflict);
+            }
 
             await _categoryRepository.DeleteCategoryAsync(existingCategory);
             await _realTimeNotifier.NotifyMenuUpdatedAsync();

@@ -1,17 +1,19 @@
 ﻿using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Npgsql; // Required to catch PostgreSQL-specific exceptions
+using OrderingSystem.Application.Interfaces.Data;
 
 namespace OrderingSystem.WebApi.Middleware
 {
     public class GlobalExceptionHandler : IExceptionHandler
     {
         private readonly ILogger<GlobalExceptionHandler> _logger;
+        private readonly IDatabaseErrorMapper _errorMapper;
 
-        public GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger)
+        public GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger, IDatabaseErrorMapper errorMapper)
         {
             _logger = logger;
+            _errorMapper = errorMapper;
         }
 
         public async ValueTask<bool> TryHandleAsync(
@@ -40,42 +42,18 @@ namespace OrderingSystem.WebApi.Middleware
                     statusCode = StatusCodes.Status409Conflict;
                     title = "Database Constraint Violation";
 
-                    // 1. Check if the underlying database threw a Postgres-specific exception
-                    if (dbUpdateEx.InnerException is PostgresException pgEx)
+                    // FIX: Use the injected mapper instead of hardcoded Npgsql logic
+                    var mappedMessage = _errorMapper.MapDbUpdateException(dbUpdateEx);
+
+                    if (mappedMessage != null)
                     {
-                        // 2. Map the specific PostgreSQL state code to a safe, precise business message
-                        detail = pgEx.SqlState switch
-                        {
-                            // 23505: unique_violation
-                            PostgresErrorCodes.UniqueViolation => "A record with this information already exists.",
-
-                            // 23503: foreign_key_violation
-                            PostgresErrorCodes.ForeignKeyViolation => "This operation failed because the record is either currently in use or references missing data.",
-
-                            // 23514: check_violation
-                            PostgresErrorCodes.CheckViolation => "The provided data violates a business rule constraint.",
-
-                            // 23502: not_null_violation
-                            PostgresErrorCodes.NotNullViolation => "A required piece of information was missing.",
-
-                            _ => "A database constraint was violated."
-                        };
-
-                        // Optional: If you want absolute precision, you can safely map specific constraint names
-                        // without exposing them to the client.
-                        if (pgEx.ConstraintName == "IX_TableSessions_TableId")
-                        {
-                            detail = "This table already has an active session.";
-                        }
-
-                        // Log the actual sensitive data securely on the server
-                        _logger.LogWarning(dbUpdateEx, "Database constraint violation. SqlState: {SqlState}, Constraint: {ConstraintName}", pgEx.SqlState, pgEx.ConstraintName);
+                        detail = mappedMessage;
+                        _logger.LogWarning(dbUpdateEx, "Database constraint violation mapped successfully.");
                     }
                     else
                     {
-                        // Fallback for non-Postgres DbUpdateExceptions
                         detail = "A data conflict occurred while processing your request.";
-                        _logger.LogWarning(dbUpdateEx, "Database constraint violation (Non-Postgres).");
+                        _logger.LogWarning(dbUpdateEx, "Database constraint violation (Unmapped).");
                     }
                     break;
 
@@ -90,12 +68,10 @@ namespace OrderingSystem.WebApi.Middleware
                     break;
 
                 // Caught FOURTH: PostgreSQL server connectivity issues
-                case NpgsqlException npgsqlEx:
+                case Exception ex when _errorMapper.IsConnectionError(ex):
                     statusCode = StatusCodes.Status500InternalServerError;
                     title = "Database Connection Error";
                     detail = "Unable to communicate with the database. Please try again later.";
-
-                    // Log the critical system failure, but hide the details from the user
                     _logger.LogError(exception, "A database connectivity error occurred.");
                     break;
 

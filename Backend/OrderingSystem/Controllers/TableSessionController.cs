@@ -27,7 +27,6 @@ namespace OrderingSystem.WebApi.Controllers
 
         // ── CUSTOMER PATH: Scan the QR code ─────────────────────────────────────
         [HttpPost("qr")]
-        [DisableRateLimiting]
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
             var result = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, CurrentDeviceSessionId);
@@ -39,17 +38,14 @@ namespace OrderingSystem.WebApi.Controllers
                     HttpOnly = true,
                     Secure = true,
                     SameSite = SameSiteMode.None,
-                    Expires = DateTime.UtcNow.AddHours(4)
+                    Expires = DateTime.UtcNow.AddHours(4),
+                    MaxAge = TimeSpan.FromHours(4),
+                    IsEssential = true
                 };
 
-                // 1. Maintain original behavior for backward compatibility
-                Response.Cookies.Append(
-                    "DeviceSessionId",
-                    result.Value.DeviceSession.DeviceSessionId.ToString(),
-                    cookieOptions
-                );
+                // LGACY COOKIE LOGIC (Less Secure, but working if there was any problems with the JWTs)
+                // Response.Cookies.Append("DeviceSessionId", result.Value.DeviceSession.DeviceSessionId.ToString(), cookieOptions);
 
-                // 2. Generate and append the stateless context token
                 var jwtProvider = HttpContext.RequestServices.GetRequiredService<IJwtProvider>();
                 var signalRToken = jwtProvider.GenerateCustomerSignalRToken(
                     result.Value.DeviceSession.DeviceSessionId,
@@ -58,7 +54,6 @@ namespace OrderingSystem.WebApi.Controllers
 
                 Response.Cookies.Append("SignalRContext", signalRToken, cookieOptions);
 
-                // 3. For Flutter applications, return the token in the response body as well
                 return Ok(new
                 {
                     tableSession = result.Value.TableSession,
@@ -100,6 +95,17 @@ namespace OrderingSystem.WebApi.Controllers
             }
 
             var result = await _sessionCommandService.RequestBillAsync(request.tableSessionId, CurrentDeviceSessionId.Value);
+            return HandleResult(result);
+        }
+
+        // ── CUSTOMER PATH: Reject the guest ─────────────────────────────────────
+        [HttpPost("reject")]
+        public async Task<IActionResult> RejectGuest([FromBody] ApproveJoiningSessionRequest request)
+        {
+            if (!CurrentDeviceSessionId.HasValue)
+                return Unauthorized(new { error = "Invalid or missing device session." });
+
+            var result = await _sessionCommandService.RejectJoiningRequestAsync(request.deviceSessionId, CurrentDeviceSessionId.Value);
             return HandleResult(result);
         }
 

@@ -57,12 +57,15 @@ namespace OrderingSystem.Infrastructure.Queries
             var guestBills = new List<GuestBillResponse>();
             int totalItemsCount = 0;
 
+            var approvedGuestsCount = session.Devices.Count(d => d.IsApproved);
+
             foreach (var device in session.Devices)
             {
                 var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
                 if (!deviceOrders.Any()) continue;
 
                 decimal guestSubTotal = 0;
+                int guestItemsCount = 0; 
 
                 var billItems = deviceOrders.SelectMany(o => o.OrderItems)
                     .GroupBy(oi => oi.MenuItemId)
@@ -71,8 +74,10 @@ namespace OrderingSystem.Infrastructure.Queries
                         var first = g.First();
                         var qty = g.Sum(i => i.Quantity);
                         var itemTotal = qty * first.UnitPrice;
+
                         guestSubTotal += itemTotal;
                         totalItemsCount += qty;
+                        guestItemsCount += qty; 
 
                         return new BillItemResponse(
                             first.MenuItemId,
@@ -85,20 +90,30 @@ namespace OrderingSystem.Infrastructure.Queries
                     }).ToList();
 
                 totalSubTotal += guestSubTotal;
-                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, billItems, guestSubTotal));
+
+                // --- 3. CALCULATE SPLIT TOTALS & PASS TO CONSTRUCTOR ---
+                decimal guestTax = _taxCalculationService.CalculateGuestTaxAmount(
+                                    guestSubTotal,
+                                    guestItemsCount,
+                                    approvedGuestsCount,
+                                    activeTaxes);
+
+                decimal guestGrandTotal = guestSubTotal + guestTax;
+
+                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, billItems, guestSubTotal, guestTax, guestGrandTotal));
             }
 
             var uniqueGuests = session.Devices.Count;
 
-            var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, uniqueGuests, totalItemsCount, activeTaxes);
+            var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, approvedGuestsCount, totalItemsCount, activeTaxes);
             var grandTotal = totalSubTotal + taxResult.TotalTaxAmount;
 
             return new BillSummaryResponse(
                 tableSessionId,
                 guestBills,
-                totalSubTotal, 
-                taxResult.AppliedTaxes, 
-                grandTotal 
+                totalSubTotal,
+                taxResult.AppliedTaxes,
+                grandTotal
             );
         }
         public async Task<SessionPollingResponse?> GetSessionPollingStatusAsync(Guid tableSessionId, Guid deviceSessionId)
