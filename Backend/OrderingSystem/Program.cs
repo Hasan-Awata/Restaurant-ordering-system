@@ -211,7 +211,8 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         ValidIssuer = jwtSettings["Issuer"],
         ValidAudience = jwtSettings["Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
+        RoleClaimType = "role"
     };
 
     options.Events = new JwtBearerEvents
@@ -236,7 +237,13 @@ builder.Services.AddAuthentication(options =>
         OnTokenValidated = context =>
         {
             var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
-            var tokenString = context.SecurityToken is JwtSecurityToken jwt ? jwt.RawData : string.Empty;
+
+            var tokenString = context.SecurityToken switch
+            {
+                System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwt => jwt.RawData,
+                Microsoft.IdentityModel.JsonWebTokens.JsonWebToken jsonToken => jsonToken.EncodedToken,
+                _ => string.Empty
+            };
 
             // Check if individual token was logged out
             if (!string.IsNullOrEmpty(tokenString) && cache.TryGetValue($"blacklist_{tokenString}", out _))

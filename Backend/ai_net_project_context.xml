@@ -169,8 +169,7 @@
 │   ├── Seeding
 │   │   └── DatabaseSeeder.cs
 │   └── signalr-test.html
-├── ai_net_project_context.xml
-└── ai_net_project_context_Updated.xml
+└── ai_net_project_context.xml
   </directory_structure>
 </project_context>
 
@@ -3538,7 +3537,7 @@ namespace OrderingSystem.Application.Services
 
             var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(deviceSessionId);
 
-            if (deviceSession == null || !deviceSession.IsApproved)
+            if (deviceSession == null || (!deviceSession.IsApproved && deviceSession.Role != enDeviceRole.Host))
                 return Result<OrderRecords.OrderResponse>.Failure("You must be approved by the table host before ordering.", enErrorType.Unauthorized);
 
             if (deviceSession.TableSession.Table.Status == enTableStatus.Billing)
