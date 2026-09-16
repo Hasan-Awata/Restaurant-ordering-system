@@ -41,7 +41,7 @@ namespace OrderingSystem.Application.Services
 
             var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(deviceSessionId);
 
-            if (deviceSession == null || !deviceSession.IsApproved)
+            if (deviceSession == null || (!deviceSession.IsApproved && deviceSession.Role != enDeviceRole.Host))
                 return Result<OrderRecords.OrderResponse>.Failure("You must be approved by the table host before ordering.", enErrorType.Unauthorized);
 
             if (deviceSession.TableSession.Table.Status == enTableStatus.Billing)

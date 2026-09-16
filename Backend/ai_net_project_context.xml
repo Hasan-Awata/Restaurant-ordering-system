@@ -40,7 +40,8 @@
 │   │   │   └── FolderProfile.pubxml.user
 │   │   └── launchSettings.json
 │   ├── appsettings.Development.json
-│   └── appsettings.json
+│   ├── appsettings.json
+│   └── dotnet-tools.json
 ├── OrderingSystem.Application
 │   ├── DTOs
 │   │   ├── AuthRecords.cs
@@ -629,6 +630,22 @@ app.Run();
   },
   "RestaurantSettings": {
     "TimeZoneId": "Asia/Damascus"
+  }
+}
+</file>
+
+<file path="OrderingSystem/dotnet-tools.json">
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "dotnet-ef": {
+      "version": "10.0.12",
+      "commands": [
+        "dotnet-ef"
+      ],
+      "rollForward": false
+    }
   }
 }
 </file>
@@ -2652,7 +2669,7 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
     public interface ITableRepository
     {
         Task AddTableAsync(Table table);
-        Task UpdateTableAsync(Table table);
+        Task UpdateTableAsync(Table table, uint? originalVersion = null);
         Task DeleteTableAsync(Table table);
         Task<bool> ExistsAsync(int tableNumber, int floor);
 
@@ -3353,7 +3370,6 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("Invalid CategoryId.");
             }
-
             if (string.IsNullOrEmpty(nameAr) || string.IsNullOrEmpty(nameEn))
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("NameAr and NameEn cannot be null or empty.");
@@ -4188,9 +4204,8 @@ namespace OrderingSystem.Application.Services
             table.TableNumber = request.TableNumber;
             table.FloorNumber = request.FloorNumber;
             table.Status = request.Status;
-            table.Version = request.Version;
 
-            await _tableRepository.UpdateTableAsync(table);
+            await _tableRepository.UpdateTableAsync(table, request.Version);
 
             var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null, request.Version);
             return Result<TableResponse>.Success(response);
@@ -6731,13 +6746,15 @@ namespace OrderingSystem.Infrastructure.Repositories
             await _context.SaveChangesAsync();
         }
 
-        public async Task UpdateTableAsync(Table table)
+        public async Task UpdateTableAsync(Table table, uint? originalVersion = null)
         {
             _context.Tables.Update(table);
 
-            // Tell EF Core the state the client started with. When SaveChangesAsync is called,
-            // EF will generate: WHERE TableId = @id AND xmin = @originalVersion
-            _context.Entry(table).Property(e => e.Version).OriginalValue = table.Version;
+            // Only override the tracker if the frontend sent a specific version to check against
+            if (originalVersion.HasValue)
+            {
+                _context.Entry(table).Property(e => e.Version).OriginalValue = originalVersion.Value;
+            }
 
             await _context.SaveChangesAsync();
         }
