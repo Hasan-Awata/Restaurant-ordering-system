@@ -219,14 +219,22 @@ builder.Services.AddAuthentication(options =>
     {
         OnMessageReceived = context =>
         {
-            // 1. Staff query string extraction (for Swagger/SignalR)
+            // 1. If an explicit Authorization header exists (Staff / Mobile App), NEVER touch it
+            if (!string.IsNullOrEmpty(context.Request.Headers.Authorization))
+            {
+                return Task.CompletedTask;
+            }
+
+            // 2. Hub-specific Query String fallback (SignalR handshake)
             var accessToken = context.Request.Query["access_token"];
             if (!string.IsNullOrEmpty(accessToken))
             {
                 context.Token = accessToken;
+                return Task.CompletedTask;
             }
-            // 2. Customer cookie extraction (NOW APPLIES GLOBALLY)
-            else if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
+
+            // 3. Customer Cookie fallback (Only evaluated if no header was sent)
+            if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
             {
                 context.Token = cookieToken;
             }
