@@ -38,7 +38,9 @@
 │   │   │   └── FolderProfile.pubxml.user
 │   │   └── launchSettings.json
 │   ├── appsettings.Development.json
-│   └── appsettings.json
+│   ├── appsettings.Production.json
+│   ├── appsettings.json
+│   └── dotnet-tools.json
 ├── OrderingSystem.Application
 │   ├── DTOs
 │   │   ├── AuthRecords.cs
@@ -570,6 +572,30 @@ app.Run();
 }
 </file>
 
+<file path="OrderingSystem/appsettings.Production.json">
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=pg8001.site4now.net;Port=6432;Database=db_ace2a4_caffe;Username=ace2a4_caffe;Password=Hussam12345@;"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "JwtSettings": {
+    "SecretKey": "MySuperSecretKeyForCaffeSystem_2026!@#$%^&*()_+",
+    "Issuer": "https://hussamhosting-001-site1.ktempurl.com",
+    "Audience": "https://hussamhosting-001-site1.ktempurl.com"
+  },
+  "AdminSettings": {
+    "DefaultPassword": "Admin@123",
+    "FullName": "MasterAdmin"
+  }
+}
+</file>
+
 <file path="OrderingSystem/appsettings.json">
 {
   "ConnectionStrings": {
@@ -590,6 +616,22 @@ app.Run();
   "AdminSettings": {
     "DefaultPassword": "",
     "FullName": ""
+  }
+}
+</file>
+
+<file path="OrderingSystem/dotnet-tools.json">
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "dotnet-ef": {
+      "version": "10.0.12",
+      "commands": [
+        "dotnet-ef"
+      ],
+      "rollForward": false
+    }
   }
 }
 </file>
@@ -2254,7 +2296,7 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyCashiersOfActivationAsync(int tableId, Guid tableSessionId);
         public Task NotifyHostOfGuestJoinAsync(Guid tableSessionId, Guid guestDeviceSessionId);
         public Task NotifyGuestOfApprovalAsync(Guid guestDeviceSessionId);
-        public Task NotifyHostOfTableActivationAsync(Guid tableSessionId);
+        public Task NotifyHostOfTableActivationAsync(Guid hostDeviceSessionId, Guid tableSessionId);
         public Task NotifyCashierOfNewOrderAsync(int orderId, Guid tableSessionId);
         public Task NotifyCustomerOfOrderStatusAsync(Guid deviceSessionId, int orderId, enOrderStatus status);
         public Task NotifyCashiersOfCustomerCancellationAsync(int orderId, Guid tableSessionId);
