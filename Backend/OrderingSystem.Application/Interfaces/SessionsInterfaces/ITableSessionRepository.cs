@@ -13,5 +13,6 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
         public Task AddSessionAsync(TableSession session);
         public Task<TableSession?> GetSessionByIdAsync(Guid tableSessionId);
         public Task UpdateSessionAsync(TableSession session);
+        public Task<List<TableSession>> GetExpiredPendingSessionsAsync(DateTime cutoffTime);
     }
 }

@@ -12,6 +12,8 @@
 ├── Gather_Feature.py
 ├── Gather_Project.py
 ├── OrderingSystem
+│   ├── BackgroundServices
+│   │   └── ZombieSessionCleanupWorker.cs
 │   ├── Controllers
 │   │   ├── AdminController.cs
 │   │   ├── AuthController.cs
@@ -38,7 +40,6 @@
 │   │   │   └── FolderProfile.pubxml.user
 │   │   └── launchSettings.json
 │   ├── appsettings.Development.json
-│   ├── appsettings.Production.json
 │   ├── appsettings.json
 │   └── dotnet-tools.json
 ├── OrderingSystem.Application
@@ -65,6 +66,9 @@
 │   │   │   ├── ICategoryCommandService.cs
 │   │   │   ├── ICategoryQuery.cs
 │   │   │   └── ICategoryRepository.cs
+│   │   ├── Data
+│   │   │   ├── IDatabaseErrorMapper.cs
+│   │   │   └── IUnitOfWork.cs
 │   │   ├── MenueItem
 │   │   │   ├── IMenueItemCommandService.cs
 │   │   │   ├── IMenueItemQuery.cs
@@ -135,7 +139,9 @@
 │   └── OrderingSystem.Domain.csproj
 ├── OrderingSystem.Infrastructure
 │   ├── Data
-│   │   └── OrderingSystemDbContext.cs
+│   │   ├── DatabaseErrorMapper.cs
+│   │   ├── OrderingSystemDbContext.cs
+│   │   └── UnitOfWork.cs
 │   ├── ExternalServices
 │   │   └── Notifications
 │   │       ├── SignalRNotifier.cs
@@ -217,6 +223,7 @@ using OrderingSystem.Application.Interfaces.Auth;
 using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.Bills;
 using OrderingSystem.Application.Interfaces.Category;
+using OrderingSystem.Application.Interfaces.Data;
 using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
@@ -247,8 +254,6 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpLogging(logging =>
 {
     logging.LoggingFields = HttpLoggingFields.All;
-    // Scrub the JWT token from the logs
-    logging.RequestHeaders.Add("Authorization");
     logging.MediaTypeOptions.AddText("application/json");
     // This is the critical line:
     logging.CombineLogs = true;
@@ -272,8 +277,16 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("DynamicRestaurantPolicy", httpContext =>
     {
-        // 1. Check if the user is already authenticated via device session
-        var hasDeviceSession = httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var sessionId);
+        // 1. Primary Secure Approach: Extract from the validated JWT Claims
+        var sessionId = httpContext.User.FindFirst("DeviceSessionId")?.Value;
+        var hasDeviceSession = !string.IsNullOrWhiteSpace(sessionId);
+
+        // 2. Web Fallback: Try to read from Cookies (Standard Browsers)
+        if (!hasDeviceSession && httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue))
+        {
+            sessionId = cookieValue;
+            hasDeviceSession = true;
+        }
 
         if (hasDeviceSession && !string.IsNullOrWhiteSpace(sessionId))
         {
@@ -284,20 +297,20 @@ builder.Services.AddRateLimiter(options =>
                     PermitLimit = 150,
                     Window = TimeSpan.FromMinutes(1),
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                    QueueLimit = 10 // Increased queue to absorb brief network reconnects
+                    QueueLimit = 10
                 });
         }
 
-        // 2. Anonymous Request: IP-based partition (Shared Restaurant Wi-Fi)
+        // 3. Anonymous Request: IP-based partition
         var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? httpContext.TraceIdentifier;
 
         return RateLimitPartition.GetFixedWindowLimiter(ip, _ =>
             new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 1000, // Massive threshold to account for NAT/Shared Wi-Fi
+                PermitLimit = 1000,
                 Window = TimeSpan.FromMinutes(1),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 50 // Large queue to prevent dropping legitimate new connections
+                QueueLimit = 50
             });
     });
 
@@ -355,11 +368,16 @@ builder.Services.AddHealthChecks()
 
 // ── Dependency Injections ──────────────────────────────────────────────────
 // Register the Global Exception Handler and standard Problem Details
+builder.Services.AddSingleton<IDatabaseErrorMapper, PostgresErrorMapper>();
 builder.Services.AddExceptionHandler<OrderingSystem.WebApi.Middleware.GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
 
+builder.Services.AddHostedService<OrderingSystem.BackgroundServices.ZombieSessionCleanupWorker>();
+
 builder.Services.AddSignalR();
 builder.Services.AddScoped<IRealTimeNotifier, SignalRNotifier>();
+
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 builder.Services.AddScoped<ISessionCommandService, SessionCommandService>();
 builder.Services.AddScoped<ITableSessionRepository, TableSessionRepository>();
@@ -406,28 +424,32 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         ValidIssuer = jwtSettings["Issuer"],
         ValidAudience = jwtSettings["Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
+        RoleClaimType = "role"
     };
 
     options.Events = new JwtBearerEvents
     {
         OnMessageReceived = context =>
         {
-            var path = context.HttpContext.Request.Path;
-
-            if (path.StartsWithSegments("/hubs"))
+            // 1. If an explicit Authorization header exists (Staff / Mobile App), NEVER touch it
+            if (!string.IsNullOrEmpty(context.Request.Headers.Authorization))
             {
-                // 1. Staff query string extraction
-                var accessToken = context.Request.Query["access_token"];
-                if (!string.IsNullOrEmpty(accessToken))
-                {
-                    context.Token = accessToken;
-                }
-                // 2. Customer cookie extraction
-                else if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
-                {
-                    context.Token = cookieToken;
-                }
+                return Task.CompletedTask;
+            }
+
+            // 2. Hub-specific Query String fallback (SignalR handshake)
+            var accessToken = context.Request.Query["access_token"];
+            if (!string.IsNullOrEmpty(accessToken))
+            {
+                context.Token = accessToken;
+                return Task.CompletedTask;
+            }
+
+            // 3. Customer Cookie fallback (Only evaluated if no header was sent)
+            if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
+            {
+                context.Token = cookieToken;
             }
 
             return Task.CompletedTask;
@@ -436,7 +458,13 @@ builder.Services.AddAuthentication(options =>
         OnTokenValidated = context =>
         {
             var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
-            var tokenString = context.SecurityToken is JwtSecurityToken jwt ? jwt.RawData : string.Empty;
+
+            var tokenString = context.SecurityToken switch
+            {
+                System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwt => jwt.RawData,
+                Microsoft.IdentityModel.JsonWebTokens.JsonWebToken jsonToken => jsonToken.EncodedToken,
+                _ => string.Empty
+            };
 
             // Check if individual token was logged out
             if (!string.IsNullOrEmpty(tokenString) && cache.TryGetValue($"blacklist_{tokenString}", out _))
@@ -455,7 +483,20 @@ builder.Services.AddAuthentication(options =>
             }
 
             return Task.CompletedTask;
-        }
+        },
+
+        OnAuthenticationFailed = context =>
+        {
+            if (context.Exception is SecurityTokenExpiredException)
+            {
+                var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                logger.LogWarning("JWT Token expired for user connection.");
+
+                // Appends a header so the frontend interceptors can catch it on HTTP requests or negotiation
+                context.Response.Headers.Append("Token-Expired", "true");
+            }
+            return Task.CompletedTask;
+        },
     };
 });
 
@@ -499,6 +540,9 @@ builder.Services.AddCors(options =>
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
+// Inject forwarded headers immediately to resolve the correct client IP
+app.UseForwardedHeaders();
+
 app.UseHttpLogging();
 app.UseExceptionHandler();
 
@@ -521,6 +565,8 @@ else
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
+
 app.MapControllers().RequireRateLimiting("DynamicRestaurantPolicy");
 app.MapHub<TableSessionNotificationsHub>("/hubs/notifications/table-session");
 app.MapHealthChecks("/api/health");
@@ -568,6 +614,9 @@ app.Run();
   "AdminSettings": {
     "DefaultPassword": "",
     "FullName": ""
+  },
+  "RestaurantSettings": {
+    "TimeZoneId": "Asia/Damascus"
   }
 }
 </file>
@@ -616,6 +665,9 @@ app.Run();
   "AdminSettings": {
     "DefaultPassword": "",
     "FullName": ""
+  },
+  "RestaurantSettings": {
+    "TimeZoneId": "Asia/Damascus"
   }
 }
 </file>
@@ -633,6 +685,60 @@ app.Run();
       "rollForward": false
     }
   }
+}
+</file>
+
+<file path="OrderingSystem/BackgroundServices/ZombieSessionCleanupWorker.cs">
+﻿using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace OrderingSystem.BackgroundServices
+{
+    public class ZombieSessionCleanupWorker : BackgroundService
+    {
+        private readonly IServiceProvider _serviceProvider;
+        private readonly ILogger<ZombieSessionCleanupWorker> _logger;
+
+        public ZombieSessionCleanupWorker(IServiceProvider serviceProvider, ILogger<ZombieSessionCleanupWorker> logger)
+        {
+            _serviceProvider = serviceProvider;
+            _logger = logger;
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            _logger.LogInformation("Zombie Session Cleanup Worker is starting.");
+
+            // Loop indefinitely until the application is shut down
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    // Background services are Singletons. To use Scoped services (like our CommandService and DbContext),
+                    // we must manually create a scope.
+                    using (var scope = _serviceProvider.CreateScope())
+                    {
+                        var sessionCommandService = scope.ServiceProvider.GetRequiredService<ISessionCommandService>();
+
+                        // Kill any session that has been pending for more than 15 minutes
+                        await sessionCommandService.CleanupZombieSessionsAsync(TimeSpan.FromMinutes(15));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "An error occurred while cleaning up zombie sessions.");
+                }
+
+                // Wait 5 minutes before checking again to avoid stressing the database
+                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+            }
+        }
+    }
 }
 </file>
 
@@ -813,14 +919,21 @@ namespace OrderingSystem.WebApi.Controllers.Base
         {
             get
             {
-                // 1. Try to read the device session from the Cookies (default for most browsers)
+                // 1. Primary Secure Approach: Extract from the validated JWT Claims
+                var sessionClaim = User.FindFirst("DeviceSessionId")?.Value;
+                if (!string.IsNullOrEmpty(sessionClaim) && Guid.TryParse(sessionClaim, out var claimSessionId))
+                {
+                    return claimSessionId;
+                }
+
+                // 2. Web Fallback: Try to read from Cookies (Standard Browsers)
                 if (Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue) &&
                     Guid.TryParse(cookieValue, out var deviceSessionId))
                 {
                     return deviceSessionId;
                 }
 
-                // 2. Try to read from the Header (fallback for iPhone/Safari)
+                // 3. Manual Header Fallback (Legacy Safari workaround)
                 if (Request.Headers.TryGetValue("x-device-session-id", out var headerValue) &&
                     Guid.TryParse(headerValue, out var headerSessionId))
                 {
@@ -1126,7 +1239,12 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
-            var result = await _orderCommandService.AddOrderAsync(request);
+            if (!CurrentDeviceSessionId.HasValue)
+            {
+                return Unauthorized(new { error = "Invalid or missing device session." });
+            }
+
+            var result = await _orderCommandService.AddOrderAsync(request, CurrentDeviceSessionId.Value);
 
             return HandleCreatedResult(
                 result,
@@ -1216,7 +1334,6 @@ namespace OrderingSystem.WebApi.Controllers
 
         // ── CUSTOMER PATH: Scan the QR code ─────────────────────────────────────
         [HttpPost("qr")]
-        [DisableRateLimiting]
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
             var result = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, CurrentDeviceSessionId);
@@ -1228,17 +1345,14 @@ namespace OrderingSystem.WebApi.Controllers
                     HttpOnly = true,
                     Secure = true,
                     SameSite = SameSiteMode.None,
-                    Expires = DateTime.UtcNow.AddHours(4)
+                    Expires = DateTime.UtcNow.AddHours(4),
+                    MaxAge = TimeSpan.FromHours(4),
+                    IsEssential = true
                 };
 
-                // 1. Maintain original behavior for backward compatibility
-                Response.Cookies.Append(
-                    "DeviceSessionId",
-                    result.Value.DeviceSession.DeviceSessionId.ToString(),
-                    cookieOptions
-                );
+                // LGACY COOKIE LOGIC (Less Secure, but working if there was any problems with the JWTs)
+                // Response.Cookies.Append("DeviceSessionId", result.Value.DeviceSession.DeviceSessionId.ToString(), cookieOptions);
 
-                // 2. Generate and append the stateless context token
                 var jwtProvider = HttpContext.RequestServices.GetRequiredService<IJwtProvider>();
                 var signalRToken = jwtProvider.GenerateCustomerSignalRToken(
                     result.Value.DeviceSession.DeviceSessionId,
@@ -1247,7 +1361,6 @@ namespace OrderingSystem.WebApi.Controllers
 
                 Response.Cookies.Append("SignalRContext", signalRToken, cookieOptions);
 
-                // 3. For Flutter applications, return the token in the response body as well
                 return Ok(new
                 {
                     tableSession = result.Value.TableSession,
@@ -1289,6 +1402,17 @@ namespace OrderingSystem.WebApi.Controllers
             }
 
             var result = await _sessionCommandService.RequestBillAsync(request.tableSessionId, CurrentDeviceSessionId.Value);
+            return HandleResult(result);
+        }
+
+        // ── CUSTOMER PATH: Reject the guest ─────────────────────────────────────
+        [HttpPost("reject")]
+        public async Task<IActionResult> RejectGuest([FromBody] ApproveJoiningSessionRequest request)
+        {
+            if (!CurrentDeviceSessionId.HasValue)
+                return Unauthorized(new { error = "Invalid or missing device session." });
+
+            var result = await _sessionCommandService.RejectJoiningRequestAsync(request.deviceSessionId, CurrentDeviceSessionId.Value);
             return HandleResult(result);
         }
 
@@ -1609,17 +1733,19 @@ namespace OrderingSystem.WebApi.Controllers
 ﻿using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Npgsql; // Required to catch PostgreSQL-specific exceptions
+using OrderingSystem.Application.Interfaces.Data;
 
 namespace OrderingSystem.WebApi.Middleware
 {
     public class GlobalExceptionHandler : IExceptionHandler
     {
         private readonly ILogger<GlobalExceptionHandler> _logger;
+        private readonly IDatabaseErrorMapper _errorMapper;
 
-        public GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger)
+        public GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger, IDatabaseErrorMapper errorMapper)
         {
             _logger = logger;
+            _errorMapper = errorMapper;
         }
 
         public async ValueTask<bool> TryHandleAsync(
@@ -1648,42 +1774,18 @@ namespace OrderingSystem.WebApi.Middleware
                     statusCode = StatusCodes.Status409Conflict;
                     title = "Database Constraint Violation";
 
-                    // 1. Check if the underlying database threw a Postgres-specific exception
-                    if (dbUpdateEx.InnerException is PostgresException pgEx)
+                    // FIX: Use the injected mapper instead of hardcoded Npgsql logic
+                    var mappedMessage = _errorMapper.MapDbUpdateException(dbUpdateEx);
+
+                    if (mappedMessage != null)
                     {
-                        // 2. Map the specific PostgreSQL state code to a safe, precise business message
-                        detail = pgEx.SqlState switch
-                        {
-                            // 23505: unique_violation
-                            PostgresErrorCodes.UniqueViolation => "A record with this information already exists.",
-
-                            // 23503: foreign_key_violation
-                            PostgresErrorCodes.ForeignKeyViolation => "This operation failed because the record is either currently in use or references missing data.",
-
-                            // 23514: check_violation
-                            PostgresErrorCodes.CheckViolation => "The provided data violates a business rule constraint.",
-
-                            // 23502: not_null_violation
-                            PostgresErrorCodes.NotNullViolation => "A required piece of information was missing.",
-
-                            _ => "A database constraint was violated."
-                        };
-
-                        // Optional: If you want absolute precision, you can safely map specific constraint names
-                        // without exposing them to the client.
-                        if (pgEx.ConstraintName == "IX_TableSessions_TableId")
-                        {
-                            detail = "This table already has an active session.";
-                        }
-
-                        // Log the actual sensitive data securely on the server
-                        _logger.LogWarning(dbUpdateEx, "Database constraint violation. SqlState: {SqlState}, Constraint: {ConstraintName}", pgEx.SqlState, pgEx.ConstraintName);
+                        detail = mappedMessage;
+                        _logger.LogWarning(dbUpdateEx, "Database constraint violation mapped successfully.");
                     }
                     else
                     {
-                        // Fallback for non-Postgres DbUpdateExceptions
                         detail = "A data conflict occurred while processing your request.";
-                        _logger.LogWarning(dbUpdateEx, "Database constraint violation (Non-Postgres).");
+                        _logger.LogWarning(dbUpdateEx, "Database constraint violation (Unmapped).");
                     }
                     break;
 
@@ -1698,12 +1800,10 @@ namespace OrderingSystem.WebApi.Middleware
                     break;
 
                 // Caught FOURTH: PostgreSQL server connectivity issues
-                case NpgsqlException npgsqlEx:
+                case Exception ex when _errorMapper.IsConnectionError(ex):
                     statusCode = StatusCodes.Status500InternalServerError;
                     title = "Database Connection Error";
                     detail = "Unable to communicate with the database. Please try again later.";
-
-                    // Log the critical system failure, but hide the details from the user
                     _logger.LogError(exception, "A database connectivity error occurred.");
                     break;
 
@@ -1902,7 +2002,6 @@ namespace OrderingSystem.Application.DTOs
         public record CreateOrderRequest(
             [Required] int TableNumber,
             [Required] Guid TableSessionId,
-            [Required] Guid DeviceSessionId,
             [Required] List<OrderItemRequest> Items);
 
         public record OrderItemRequest(
@@ -1991,7 +2090,8 @@ namespace OrderingSystem.Application.DTOs
         [Required] int TableId,
         [Required] int TableNumber,
         [Required] int FloorNumber,
-        [Required] enTableStatus Status);
+        [Required] enTableStatus Status,
+        [Required] uint Version);
 
     // Query/Command Response Payloads
     public record TableResponse(
@@ -2000,7 +2100,8 @@ namespace OrderingSystem.Application.DTOs
         int FloorNumber,
         string QrCode,
         enTableStatus Status,
-        Guid? TableSessionId = null
+        Guid? TableSessionId = null,
+        uint Version = 0
     );
 
     public record PendingTableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status, Guid TableSessionId, DateTime? CreatedAt);
@@ -2213,6 +2314,33 @@ namespace OrderingSystem.Application.Interfaces.Category
         public Task<Domain.Entities.Category?> GetCategoryByIdAsync(int categoryId);
         public Task<bool> GetCategoryExistsAsync(int categoryId);
          public Task<bool> CategoryIsExistsByNameAsync(string nameEn, string nameAr);
+        public Task<bool> HasActiveOrdersAsync(int categoryId);
+    }
+}
+</file>
+
+<file path="OrderingSystem.Application/Interfaces/Data/IDatabaseErrorMapper.cs">
+﻿using System;
+
+namespace OrderingSystem.Application.Interfaces.Data
+{
+    public interface IDatabaseErrorMapper
+    {
+        string? MapDbUpdateException(Exception exception);
+        bool IsConnectionError(Exception exception);
+    }
+}
+</file>
+
+<file path="OrderingSystem.Application/Interfaces/Data/IUnitOfWork.cs">
+﻿using System;
+using System.Threading.Tasks;
+
+namespace OrderingSystem.Application.Interfaces.Data
+{
+    public interface IUnitOfWork
+    {
+        Task ExecuteTransactionAsync(Func<Task> action);
     }
 }
 </file>
@@ -2275,10 +2403,11 @@ namespace OrderingSystem.Application.Interfaces.MenueItem
         public Task AddMenuItemAsync(MenuItem menuItem);
         public Task UpdateMenuItemAsync(MenuItem menuItem);
         public Task<bool> DeleteMenuItemAsync(MenuItem menuItemq);
-          public Task<MenuItem?> GetMenuItemByIdAsync(int menuItemId);
+         public Task<MenuItem?> GetMenuItemByIdAsync(int menuItemId);
         public Task<bool> GetItemExistsAsync(int menuItemId);
         public  Task<bool> ItemIsExistsByNameAsync(string nameEn, string nameAr, int categoryId);
-
+        public Task<bool> HasActiveOrdersAsync(int menuItemId);
+        public Task<IEnumerable<MenuItem>> GetMenuItemsByIdsAsync(IEnumerable<int> menuItemIds);
     }
 }
 </file>
@@ -2308,6 +2437,11 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyCustomerOfSessionEndedAsync(Guid tableSessionId);
         public Task NotifyGuestsOfBillRequestAsync(Guid tableSessionId);
         public Task NotifyTaxesUpdatedAsync();
+        public Task NotifyGuestOfRejectionAsync(Guid guestDeviceSessionId);
+        public Task NotifyCashiersOfZombieSessionClearedAsync(Guid tableSessionId);
+        public Task NotifyCashiersOfOrderSyncAsync(int orderId, enOrderStatus status);
+        public Task NotifyCashiersOfTableSessionSyncAsync(Guid tableSessionId, enSessionStatus status);
+        public Task NotifyCashiersOfBillSyncAsync(Guid tableSessionId);
     }
 }
 </file>
@@ -2336,6 +2470,11 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveSessionEnded(string message);
         public Task ReceiveBillRequested(string tableSessionId);
         public Task ReceiveTaxesUpdated(string message);
+        public Task ReceiveHostRejectionNotification(string message);
+        public Task ReceiveZombieSessionCleared(Guid tableSessionId, string message);
+        public Task ReceiveCashierOrderSync(int orderId, enOrderStatus status, string message);
+        public Task ReceiveCashierTableSessionSync(Guid tableSessionId, enSessionStatus status, string message);
+        public Task ReceiveCashierBillSync(Guid tableSessionId, string message);
     }
 }
 </file>
@@ -2348,7 +2487,7 @@ namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
 {
     public interface IOrderCommandService
     {
-        Task<Result<OrderRecords.OrderResponse>> AddOrderAsync(OrderRecords.CreateOrderRequest request);
+        Task<Result<OrderRecords.OrderResponse>> AddOrderAsync(OrderRecords.CreateOrderRequest request, Guid deviceSessionId);
         Task<Result<bool>> ApproveOrderAsync(int orderId);
         Task<Result<bool>> CancelOrderAsync(int orderId);
         Task<Result<bool>> CancelOrderByCustomerAsync(int orderId, Guid deviceSessionId);
@@ -2386,15 +2525,15 @@ namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
 <file path="OrderingSystem.Application/Interfaces/OrdersInterfaces/IOrderRepository.cs">
 ﻿using OrderingSystem.Domain.Entities;
 
-namespace OrderingSystem.Application.Interfaces.OrdersInterfaces
+public interface IOrderRepository
 {
-    public interface IOrderRepository
-    {
-        Task AddOrderAsync(Order order);
-        Task<Order?> GetOrderByIdAsync(int orderId);
-        Task UpdateOrderAsync(Order order);
-        Task DeleteOrderAsync(Order order);
-    }
+    Task AddOrderAsync(Order order);
+    Task<Order?> GetOrderByIdAsync(int orderId);
+    Task UpdateOrderAsync(Order order);
+    Task UpdateOrdersAsync(IEnumerable<Order> orders);
+    Task DeleteOrderAsync(Order order); // Soft delete
+    Task HardDeleteOrderAsync(Order order); // Hard delete
+    Task HardDeleteOrdersAsync(IEnumerable<Order> orders);
 }
 </file>
 
@@ -2442,6 +2581,7 @@ namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
         public Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId);
         public Task AddSessionAsync(DeviceSession session);
         public Task UpdateDeviceSessionAsync(DeviceSession session);
+        public Task DeleteDeviceSessionAsync(DeviceSession session);
     }
 }
 </file>
@@ -2465,6 +2605,8 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
         public Task<Result> RequestBillAsync(Guid tableSessionId, Guid deviceSessionId);
         public Task<Result> DismissTableSessionAsync(Guid tableSessionId);
         public Task<Result> DismissBillAsync(Guid tableSessionId);
+        public Task<Result> CleanupZombieSessionsAsync(TimeSpan expirationWindow);
+        public Task<Result> RejectJoiningRequestAsync(Guid guestDeviceSessionId, Guid hostDeviceSessionId);
     }
 }
 </file>
@@ -2503,6 +2645,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
         public Task AddSessionAsync(TableSession session);
         public Task<TableSession?> GetSessionByIdAsync(Guid tableSessionId);
         public Task UpdateSessionAsync(TableSession session);
+        public Task<List<TableSession>> GetExpiredPendingSessionsAsync(DateTime cutoffTime);
     }
 }
 </file>
@@ -2564,7 +2707,7 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
     public interface ITableRepository
     {
         Task AddTableAsync(Table table);
-        Task UpdateTableAsync(Table table);
+        Task UpdateTableAsync(Table table, uint? originalVersion = null);
         Task DeleteTableAsync(Table table);
         Task<bool> ExistsAsync(int tableNumber, int floor);
 
@@ -2584,11 +2727,13 @@ namespace OrderingSystem.Application.Interfaces.TaxesInterfaces
 {
     public interface ITaxCalculationService
     {
-        (List<AppliedTaxResponse> AppliedTaxes, decimal TotalTaxAmount) CalculateTaxes(
+        public (List<AppliedTaxResponse> AppliedTaxes, decimal TotalTaxAmount) CalculateTaxes(
             decimal subTotal,
             int uniqueGuestsCount,
             int totalItemsCount,
             IEnumerable<Tax> activeTaxes);
+
+        public decimal CalculateGuestTaxAmount(decimal guestSubTotal, int guestItemsCount, int totalGuestsCount, IEnumerable<Tax> activeTaxes);
     }
 }
 </file>
@@ -2810,6 +2955,7 @@ namespace OrderingSystem.Application.Services
 
             user.RefreshToken = refreshToken;
             user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            user.AbsoluteRefreshTokenExpiryTime = DateTime.UtcNow.AddDays(30);
             await _userRepository.UpdateUserAsync(user);
 
             var response = new LoginResponse(token, refreshToken, expiryTime, user.FullName, user.Role);
@@ -2924,6 +3070,21 @@ namespace OrderingSystem.Application.Services
         {
             var user = await _userRepository.GetUserByIdAsync(userId);
             if (user == null) return Result<bool>.Failure("User not found.", enErrorType.NotFound);
+
+            if (!string.IsNullOrWhiteSpace(request.NewPassword))
+            {
+                if (string.IsNullOrWhiteSpace(request.CurrentPassword))
+                    return Result<bool>.Failure("Current password is required to set a new password.", enErrorType.Validation);
+
+                if (!BCrypt.Net.BCrypt.EnhancedVerify(request.CurrentPassword, user.PasswordHash))
+                    return Result<bool>.Failure("Invalid current password.", enErrorType.Validation);
+
+                user.PasswordHash = BCrypt.Net.BCrypt.EnhancedHashPassword(request.NewPassword);
+            }
+            else if (!string.IsNullOrWhiteSpace(request.CurrentPassword))
+            {
+                return Result<bool>.Failure("New password is required if you are providing your current password.", enErrorType.Validation);
+            }
 
             if (!string.IsNullOrWhiteSpace(request.CurrentPassword) && !string.IsNullOrWhiteSpace(request.NewPassword))
             {
@@ -3059,6 +3220,14 @@ namespace OrderingSystem.Application.Services
             if (existingCategory == null)
             {
                 return Result<bool>.Failure($"Category with ID {request.CategoryId} not found.", enErrorType.NotFound);
+            }
+
+            bool hasActiveOrders = await _categoryRepository.HasActiveOrdersAsync(request.CategoryId);
+            if (hasActiveOrders)
+            {
+                return Result<bool>.Failure(
+                    "Cannot delete this category because it contains menu items that are currently part of active orders being prepared.",
+                    enErrorType.Conflict);
             }
 
             await _categoryRepository.DeleteCategoryAsync(existingCategory);
@@ -3239,10 +3408,6 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("Invalid CategoryId.");
             }
-            if (string.IsNullOrEmpty(imageUrl))
-            {
-                return Result<MenuRecords.MenuItemResponse>.Failure("ImageUrl cannot be null or empty.");
-            }
             if (string.IsNullOrEmpty(nameAr) || string.IsNullOrEmpty(nameEn))
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("NameAr and NameEn cannot be null or empty.");
@@ -3350,6 +3515,13 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<bool>.Failure($"Menu item with ID {request.MenuItemId} not found.");
             }
+            bool hasActiveOrders = await _menuItemRepository.HasActiveOrdersAsync(request.MenuItemId);
+            if (hasActiveOrders)
+            {
+                return Result<bool>.Failure(
+                    "Cannot delete this menu item because it is currently part of an active order.",
+                    enErrorType.Conflict);
+            }
             await _menuItemRepository.DeleteMenuItemAsync(existingMenuItem);
             await _realTimeNotifier.NotifyMenuUpdatedAsync();
 
@@ -3391,37 +3563,41 @@ namespace OrderingSystem.Application.Services
             _deviceSessionRepository = deviceSessionRepository;
         }
 
-        public async Task<Result<OrderRecords.OrderResponse>> AddOrderAsync(OrderRecords.CreateOrderRequest request)
+        public async Task<Result<OrderRecords.OrderResponse>> AddOrderAsync(OrderRecords.CreateOrderRequest request, Guid deviceSessionId)
         {
             if (request == null)
-            {
                 return Result<OrderRecords.OrderResponse>.Failure("Request cannot be null.", enErrorType.Validation);
-            }
 
             if (request.TableNumber <= 0)
-            {
                 return Result<OrderRecords.OrderResponse>.Failure("Table number must be greater than zero.", enErrorType.Validation);
-            }
 
             if (!request.Items.Any())
-            {
                 return Result<OrderRecords.OrderResponse>.Failure("Order must contain at least one item.", enErrorType.Validation);
-            }
 
-            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(request.DeviceSessionId);
+            var deviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(deviceSessionId);
 
-            if (deviceSession == null || !deviceSession.IsApproved)
-            {
+            if (deviceSession == null || (!deviceSession.IsApproved && deviceSession.Role != enDeviceRole.Host))
                 return Result<OrderRecords.OrderResponse>.Failure("You must be approved by the table host before ordering.", enErrorType.Unauthorized);
-            }
+
+            if (deviceSession.TableSession.Table.Status == enTableStatus.Billing)
+                return Result<OrderRecords.OrderResponse>.Failure("Orders cannot be placed while the table is processing the bill.", enErrorType.Conflict);
+
+            if (deviceSession.TableSessionId != request.TableSessionId)
+                return Result<OrderRecords.OrderResponse>.Failure("The device session does not belong to the requested table session.", enErrorType.Unauthorized);
+
+            // 1. Fetch all items in a single query before the loop
+            var requestedItemIds = request.Items.Select(i => i.MenuItemId).Distinct();
+            var fetchedItems = await _menuItemRepository.GetMenuItemsByIdsAsync(requestedItemIds);
+            var menuItemsDict = fetchedItems.ToDictionary(m => m.MenuItemId);
 
             decimal totalAmount = 0;
             var orderItems = new List<OrderItem>();
+            var responseItems = new List<OrderRecords.OrderItemResponse>();
 
             foreach (var itemReq in request.Items)
             {
-                var menuItem = await _menuItemRepository.GetMenuItemByIdAsync(itemReq.MenuItemId);
-                if (menuItem == null || !menuItem.IsAvailable)
+                // 2. Read from the dictionary instead of the database
+                if (!menuItemsDict.TryGetValue(itemReq.MenuItemId, out var menuItem) || !menuItem.IsAvailable)
                     return Result<OrderRecords.OrderResponse>.Failure($"Menu item {itemReq.MenuItemId} is unavailable.", enErrorType.Validation);
 
                 totalAmount += menuItem.Price * itemReq.Quantity;
@@ -3430,15 +3606,18 @@ namespace OrderingSystem.Application.Services
                 {
                     MenuItemId = menuItem.MenuItemId,
                     Quantity = itemReq.Quantity,
-                    UnitPrice = menuItem.Price, // Securely sourced from DB
+                    UnitPrice = menuItem.Price,
                     Notes = itemReq.Notes
                 });
+
+                responseItems.Add(new OrderRecords.OrderItemResponse(
+                    menuItem.MenuItemId, menuItem.NameEn, menuItem.NameAr, itemReq.Quantity, menuItem.Price, itemReq.Notes));
             }
 
             var order = new Order
             {
                 TableSessionId = request.TableSessionId,
-                DeviceSessionId = request.DeviceSessionId,
+                DeviceSessionId = deviceSessionId,
                 TotalAmount = totalAmount,
                 OrderStatus = enOrderStatus.Pending,
                 CreatedAt = DateTime.UtcNow,
@@ -3446,15 +3625,11 @@ namespace OrderingSystem.Application.Services
             };
 
             await _orderRepository.AddOrderAsync(order);
-
-            // Notify Cashiers
             await _notifier.NotifyCashierOfNewOrderAsync(order.OrderId, order.TableSessionId);
 
-            // Construct Response
-            var responseItems = order.OrderItems.Select(oi => new OrderRecords.OrderItemResponse(
-                oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.Quantity, oi.UnitPrice, oi.Notes)).ToList();
-
+            // --- 3. USE THE PRE-MAPPED LIST ---
             var response = new OrderRecords.OrderResponse(order.OrderId, request.TableNumber, order.TotalAmount, order.OrderStatus, order.CreatedAt, responseItems);
+
             return Result<OrderRecords.OrderResponse>.Success(response);
         }
 
@@ -3473,6 +3648,9 @@ namespace OrderingSystem.Application.Services
             // Notify Customer
             await _notifier.NotifyCustomerOfOrderStatusAsync(order.DeviceSessionId, order.OrderId, order.OrderStatus);
 
+            // Notify Cashier
+            await _notifier.NotifyCashiersOfOrderSyncAsync(order.OrderId, order.OrderStatus);
+
             return Result<bool>.Success(true);
         }
 
@@ -3484,7 +3662,7 @@ namespace OrderingSystem.Application.Services
 
             await _notifier.NotifyCustomerOfOrderRejectedAsync(order.DeviceSessionId, order.OrderId);
 
-            // Per requirement: Order is immediately deleted from the database
+            // Soft delete for auditing purposes
             await _orderRepository.DeleteOrderAsync(order);
 
             return Result<bool>.Success(true);
@@ -3496,19 +3674,21 @@ namespace OrderingSystem.Application.Services
             if (order == null)
                 return Result<bool>.Failure("Order not found.", enErrorType.NotFound);
 
-            // 1. Security Guard: Does this order belong to the device trying to cancel it?
-            if (order.DeviceSessionId != deviceSessionId)
+            // 1. Security Guard
+            if (order.DeviceSessionId != deviceSessionId && order.Device.Role != enDeviceRole.Host)
                 return Result<bool>.Failure("You are not authorized to cancel this order.", enErrorType.Unauthorized);
 
-            // 2. Business Rule Guard: Has the kitchen already started?
+            // 2. Business Rule Guard
             if (order.OrderStatus != enOrderStatus.Pending)
                 return Result<bool>.Failure("Your order is already being prepared. Please speak to the cashier to cancel.", enErrorType.Conflict);
 
             // 3. Execution
-            await _orderRepository.DeleteOrderAsync(order);
+            order.OrderStatus = enOrderStatus.Cancelled;
+            await _orderRepository.UpdateOrderAsync(order);
 
             // 4. Notification
             await _notifier.NotifyCashiersOfCustomerCancellationAsync(order.OrderId, order.TableSessionId);
+            await _notifier.NotifyCashiersOfOrderSyncAsync(order.OrderId, order.OrderStatus);
 
             return Result<bool>.Success(true);
         }
@@ -3520,6 +3700,7 @@ namespace OrderingSystem.Application.Services
 ﻿using Microsoft.Extensions.Caching.Memory;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Bills;
+using OrderingSystem.Application.Interfaces.Data;
 using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
@@ -3530,6 +3711,10 @@ using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace OrderingSystem.Application.Services
 {
@@ -3542,6 +3727,7 @@ namespace OrderingSystem.Application.Services
         private readonly ITaxRepository _taxRepository;
         private readonly ITaxCalculationService _taxCalculationService;
         private readonly IBillRepository _billRepository;
+        private readonly IUnitOfWork _unitOfWork;
         private readonly IRealTimeNotifier _notifier;
         private readonly IMemoryCache _cache;
 
@@ -3553,6 +3739,7 @@ namespace OrderingSystem.Application.Services
             ITaxRepository taxRepository,
             ITaxCalculationService taxCalculationService,
             IBillRepository billRepository,
+            IUnitOfWork unitOfWork,
             IRealTimeNotifier notifier,
             IMemoryCache cache)
         {
@@ -3563,6 +3750,7 @@ namespace OrderingSystem.Application.Services
             _taxRepository = taxRepository;
             _taxCalculationService = taxCalculationService;
             _billRepository = billRepository;
+            _unitOfWork = unitOfWork;
             _notifier = notifier;
             _cache = cache;
         }
@@ -3574,6 +3762,17 @@ namespace OrderingSystem.Application.Services
             if (table == null)
             {
                 return Result<SessionResponse>.Failure("Table was not found.", enErrorType.NotFound);
+            }
+
+            if (table.Status == enTableStatus.Billing)
+            {
+                var billingSession = table.Sessions.FirstOrDefault(s => s.ClosedAt == null);
+                if (billingSession != null && deviceSessionId.HasValue && billingSession.Devices.Any(d => d.DeviceSessionId == deviceSessionId.Value))
+                {
+                    return AccessTableSessionAsync(billingSession, deviceSessionId.Value);
+                }
+
+                return Result<SessionResponse>.Failure("This table is currently processing payment. Please wait until it is cleared.", enErrorType.Conflict);
             }
 
             var activeSession = table.Sessions.FirstOrDefault(s => s.ClosedAt == null && s.Status != enSessionStatus.Closed);
@@ -3588,11 +3787,32 @@ namespace OrderingSystem.Application.Services
                 return await JoinTableSessionAsync(activeSession, Guid.CreateVersion7());
             }
 
-            table.Status = enTableStatus.Occupied;
+            try
+            {
+                Result<SessionResponse>? activationResult = null;
 
-            await _tableRepository.UpdateTableAsync(table);
+                // --- Transaction Wrapper Added ---
+                await _unitOfWork.ExecuteTransactionAsync(async () =>
+                {
+                    table.Status = enTableStatus.Occupied;
+                    await _tableRepository.UpdateTableAsync(table);
+                    activationResult = await ActivateTableSessionAsync(table.TableId, deviceSessionId ?? Guid.CreateVersion7());
+                });
 
-            return await ActivateTableSessionAsync(table.TableId, Guid.CreateVersion7());
+                return activationResult!;
+            }
+            catch (Exception)
+            {
+                var refreshedTable = await _tableSessionRepository.GetTableWithActiveSessionAsync(qrCode);
+                var newActiveSession = refreshedTable?.Sessions.FirstOrDefault(s => s.ClosedAt == null && s.Status != enSessionStatus.Closed);
+
+                if (newActiveSession != null)
+                {
+                    return await JoinTableSessionAsync(newActiveSession, deviceSessionId ?? Guid.CreateVersion7());
+                }
+
+                throw;
+            }
         }
 
         private async Task<Result<SessionResponse>> ActivateTableSessionAsync(int tableId, Guid deviceSessionId)
@@ -3615,10 +3835,7 @@ namespace OrderingSystem.Application.Services
                 TableSession = tableSession,
             };
 
-            // Optimization: EF Core Graph Insertion.
-            // Saving the DeviceSession automatically saves the attached TableSession! (1 Round Trip)
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
-
             await _notifier.NotifyCashiersOfActivationAsync(tableId, tableSession.TableSessionId);
 
             return Result<SessionResponse>.Success(tableSession.ToResponse(deviceSession));
@@ -3635,16 +3852,13 @@ namespace OrderingSystem.Application.Services
             };
 
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
-
             await _notifier.NotifyHostOfGuestJoinAsync(tableSession.TableSessionId, deviceSessionId);
 
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(tableSession, deviceSession));
         }
 
-        // Changed from 'async Task' to synchronous 'Result' because we no longer query the DB here!
         private Result<SessionResponse> AccessTableSessionAsync(TableSession activeSession, Guid deviceSessionId)
         {
-            // Search for the device in the list we already loaded into memory
             var deviceSession = activeSession.Devices.FirstOrDefault(d => d.DeviceSessionId == deviceSessionId);
 
             if (deviceSession == null)
@@ -3657,7 +3871,6 @@ namespace OrderingSystem.Application.Services
 
         private void RevokeSessionInCache(Guid tableSessionId)
         {
-            // Retain revocation flag for 4 hours to match JWT lifespan
             _cache.Set($"revoked_table_session_{tableSessionId}", true, TimeSpan.FromHours(4));
         }
 
@@ -3675,16 +3888,16 @@ namespace OrderingSystem.Application.Services
                 return Result<TableSessionResponse>.Failure("Session is not pending activation.", enErrorType.Conflict);
             }
 
-            // Process Activation
             session.Status = enSessionStatus.Active;
             await _tableSessionRepository.UpdateSessionAsync(session);
 
-            // Alert the Host that the menu is now unlocked
             var hostDevice = session.Devices.FirstOrDefault(d => d.Role == enDeviceRole.Host);
             if (hostDevice != null)
             {
                 await _notifier.NotifyHostOfTableActivationAsync(hostDevice.DeviceSessionId, session.TableSessionId);
             }
+
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, session.Status);
 
             return Result<TableSessionResponse>.Success(session.ToResponse());
         }
@@ -3695,10 +3908,8 @@ namespace OrderingSystem.Application.Services
             if (guestDeviceSession == null)
                 return Result<SessionResponse>.Failure("Device session not found.", enErrorType.NotFound);
 
-            // Fetch the host's session to verify authority
             var hostDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(hostDeviceSessionId);
 
-            // Validate role and table session match
             if (hostDeviceSession == null ||
                 hostDeviceSession.Role != enDeviceRole.Host ||
                 hostDeviceSession.TableSessionId != guestDeviceSession.TableSessionId)
@@ -3719,25 +3930,32 @@ namespace OrderingSystem.Application.Services
             if (session == null)
                 return Result.Failure("No active table session was found.", enErrorType.NotFound);
 
-            if (session.Orders != null && session.Orders.Any())
+            if (session.Orders != null && session.Orders.Any(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served))
             {
-                foreach (var order in session.Orders.ToList())
+                return Result.Failure("Cannot deactivate session: Active orders are being prepared or served.", enErrorType.Conflict);
+            }
+
+            // --- Transaction Wrapper Added ---
+            await _unitOfWork.ExecuteTransactionAsync(async () =>
+            {
+                if (session.Orders != null && session.Orders.Any())
                 {
-                    await _orderRepository.DeleteOrderAsync(order);
+                    await _orderRepository.HardDeleteOrdersAsync(session.Orders);
                 }
-            }
 
-            await _tableSessionRepository.DeleteSessionAsync(session);
+                await _tableSessionRepository.DeleteSessionAsync(session);
 
-            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
-            if (table != null)
-            {
-                table.Status = enTableStatus.Available;
-                await _tableRepository.UpdateTableAsync(table);
-            }
+                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                if (table != null)
+                {
+                    table.Status = enTableStatus.Available;
+                    await _tableRepository.UpdateTableAsync(table);
+                }
+            });
 
-            // Revoke stateless tokens for this session
             RevokeSessionInCache(tableSessionId);
+
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
 
             return Result.Success();
         }
@@ -3748,7 +3966,6 @@ namespace OrderingSystem.Application.Services
             if (session == null)
                 return Result.Failure("No active table session was found.", enErrorType.NotFound);
 
-            // Security check: Verify the device belongs to this table session
             if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
                 return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
 
@@ -3757,9 +3974,7 @@ namespace OrderingSystem.Application.Services
 
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
 
-            // This acts as the single "AcceptPayment" notification to the cashier
             await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
-
             await _notifier.NotifyGuestsOfBillRequestAsync(tableSessionId);
 
             table.Status = enTableStatus.Billing;
@@ -3774,11 +3989,9 @@ namespace OrderingSystem.Application.Services
             if (session == null)
                 return Result<SessionResponse>.Failure("No active table session was found.", enErrorType.NotFound);
 
-            // 1. Filter out cancelled orders and flatten the items
             var validOrders = session.Orders.Where(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served).ToList();
             var allOrderItems = validOrders.SelectMany(o => o.OrderItems).ToList();
 
-            // 2. Consolidate matching items for the final receipt
             var consolidatedItems = allOrderItems
                 .GroupBy(oi => new { oi.MenuItemId, oi.MenuItem.NameEn, oi.MenuItem.NameAr, oi.UnitPrice })
                 .Select(g => new BillItem
@@ -3791,15 +4004,14 @@ namespace OrderingSystem.Application.Services
                     TotalPrice = g.Key.UnitPrice * g.Sum(oi => oi.Quantity)
                 }).ToList();
 
-            // 3. Perform Tax Calculations using your existing service
             decimal totalSubTotal = consolidatedItems.Sum(i => i.TotalPrice);
             int totalItemsCount = consolidatedItems.Sum(i => i.Quantity);
-            int uniqueGuestsCount = session.Devices.Count;
+
+            int uniqueGuestsCount = session.Devices.Count(d => d.IsApproved);
 
             var activeTaxes = await _taxRepository.GetActiveTaxesAsync();
             var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, uniqueGuestsCount, totalItemsCount, activeTaxes);
 
-            // 4. Create the Immutable Snapshot (The Bill)
             var finalBill = new Bill
             {
                 TableSessionId = session.TableSessionId,
@@ -3816,30 +4028,34 @@ namespace OrderingSystem.Application.Services
                 }).ToList()
             };
 
-            // Save the bill snapshot to the database
-            await _billRepository.AddBillAsync(finalBill);
-
-            // 5. Proceed with closing the session (Your existing logic)
-            session.Status = enSessionStatus.Closed;
-            session.ClosedAt = DateTime.UtcNow;
-
-            foreach (var order in validOrders)
+            // --- Transaction Wrapper Maintained ---
+            await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
-                order.OrderStatus = enOrderStatus.Served;
-                await _orderRepository.UpdateOrderAsync(order);
-            }
+                await _billRepository.AddBillAsync(finalBill);
 
-            await _tableSessionRepository.UpdateSessionAsync(session);
+                session.Status = enSessionStatus.Closed;
+                session.ClosedAt = DateTime.UtcNow;
 
-            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
-            if (table != null)
-            {
-                table.Status = enTableStatus.Available;
-                await _tableRepository.UpdateTableAsync(table);
-            }
+                foreach (var order in validOrders) order.OrderStatus = enOrderStatus.Served;
+                await _orderRepository.UpdateOrdersAsync(validOrders);
+
+                var orphanedPendingOrders = session.Orders.Where(o => o.OrderStatus == enOrderStatus.Pending).ToList();
+                foreach (var orphaned in orphanedPendingOrders) orphaned.OrderStatus = enOrderStatus.Cancelled;
+                if (orphanedPendingOrders.Any()) await _orderRepository.UpdateOrdersAsync(orphanedPendingOrders);
+
+                await _tableSessionRepository.UpdateSessionAsync(session);
+
+                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                if (table != null)
+                {
+                    table.Status = enTableStatus.Available;
+                    await _tableRepository.UpdateTableAsync(table);
+                }
+            });
 
             RevokeSessionInCache(tableSessionId);
             await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
         }
@@ -3853,20 +4069,22 @@ namespace OrderingSystem.Application.Services
             if (session.Status != enSessionStatus.PendingActivation)
                 return Result.Failure("Session is not pending activation.", enErrorType.Conflict);
 
-            var table = await _tableRepository.GetTableByIdAsync(session.TableId);
-            if (table != null)
+            // --- Transaction Wrapper Added ---
+            await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
-                table.Status = enTableStatus.Available;
-                await _tableRepository.UpdateTableAsync(table);
-            }
+                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                if (table != null)
+                {
+                    table.Status = enTableStatus.Available;
+                    await _tableRepository.UpdateTableAsync(table);
+                }
+
+                session.Status = enSessionStatus.Closed;
+                session.ClosedAt = DateTime.UtcNow;
+                await _tableSessionRepository.UpdateSessionAsync(session);
+            });
 
             await _notifier.NotifyCustomerOfActivationDismissedAsync(tableSessionId);
-
-            session.Status = enSessionStatus.Closed;
-            session.ClosedAt = DateTime.UtcNow;
-            await _tableSessionRepository.UpdateSessionAsync(session);
-
-            // Revoke stateless tokens for this session
             RevokeSessionInCache(tableSessionId);
 
             return Result.Success();
@@ -3889,6 +4107,63 @@ namespace OrderingSystem.Application.Services
             }
 
             await _notifier.NotifyCustomerOfBillRejectedAsync(tableSessionId);
+            await _notifier.NotifyCashiersOfBillSyncAsync(tableSessionId);
+
+            return Result.Success();
+        }
+
+        public async Task<Result> CleanupZombieSessionsAsync(TimeSpan expirationWindow)
+        {
+            var cutoffTime = DateTime.UtcNow.Subtract(expirationWindow);
+            var expiredSessions = await _tableSessionRepository.GetExpiredPendingSessionsAsync(cutoffTime);
+
+            if (!expiredSessions.Any())
+                return Result.Success();
+
+            foreach (var session in expiredSessions)
+            {
+                // --- Transaction Wrapper Added (Per-Session) ---
+                await _unitOfWork.ExecuteTransactionAsync(async () =>
+                {
+                    session.Status = enSessionStatus.Closed;
+                    session.ClosedAt = DateTime.UtcNow;
+
+                    if (session.Table != null)
+                    {
+                        session.Table.Status = enTableStatus.Available;
+                        await _tableRepository.UpdateTableAsync(session.Table);
+                    }
+
+                    await _tableSessionRepository.UpdateSessionAsync(session);
+                });
+
+                await _notifier.NotifyCustomerOfActivationDismissedAsync(session.TableSessionId);
+                await _notifier.NotifyCashiersOfZombieSessionClearedAsync(session.TableSessionId);
+
+                RevokeSessionInCache(session.TableSessionId);
+            }
+
+            return Result.Success();
+        }
+
+        public async Task<Result> RejectJoiningRequestAsync(Guid guestDeviceSessionId, Guid hostDeviceSessionId)
+        {
+            var guestDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(guestDeviceSessionId);
+            if (guestDeviceSession == null)
+                return Result.Failure("Device session not found.", enErrorType.NotFound);
+
+            var hostDeviceSession = await _deviceSessionRepository.GetDeviceSessionByIdAsync(hostDeviceSessionId);
+
+            if (hostDeviceSession == null ||
+                hostDeviceSession.Role != enDeviceRole.Host ||
+                hostDeviceSession.TableSessionId != guestDeviceSession.TableSessionId)
+            {
+                return Result.Failure("Unauthorized to reject guests for this table.", enErrorType.Unauthorized);
+            }
+
+            // Terminate the session and notify the guest
+            await _deviceSessionRepository.DeleteDeviceSessionAsync(guestDeviceSession);
+            await _notifier.NotifyGuestOfRejectionAsync(guestDeviceSession.DeviceSessionId);
 
             return Result.Success();
         }
@@ -3945,7 +4220,7 @@ namespace OrderingSystem.Application.Services
 
             await _tableRepository.AddTableAsync(newTable);
 
-            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status, null);
+            var response = new TableResponse(newTable.TableId, newTable.TableNumber, newTable.FloorNumber, newTable.QrCode, newTable.Status, null, newTable.Version);
 
             return Result<TableResponse>.Success(response);
         }
@@ -3968,9 +4243,9 @@ namespace OrderingSystem.Application.Services
             table.FloorNumber = request.FloorNumber;
             table.Status = request.Status;
 
-            await _tableRepository.UpdateTableAsync(table);
+            await _tableRepository.UpdateTableAsync(table, request.Version);
 
-            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null);
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null, request.Version);
             return Result<TableResponse>.Success(response);
         }
 
@@ -4004,7 +4279,7 @@ namespace OrderingSystem.Application.Services
 
             await _tableRepository.UpdateTableAsync(table);
 
-            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null);
+            var response = new TableResponse(table.TableId, table.TableNumber, table.FloorNumber, table.QrCode, table.Status, null, table.Version);
             return Result<TableResponse>.Success(response);
         }
 
@@ -4024,7 +4299,8 @@ namespace OrderingSystem.Application.Services
                 existingTable.FloorNumber,
                 existingTable.QrCode,
                 existingTable.Status,
-                null
+                null,
+                existingTable.Version
             );
         }
     }
@@ -4075,7 +4351,8 @@ namespace OrderingSystem.Application.Services
 
                 if (taxAmount > 0)
                 {
-                    var roundedAmount = Math.Round(taxAmount, 2);
+                    // Standard rounding away from zero
+                    var roundedAmount = Math.Round(taxAmount, 2, MidpointRounding.AwayFromZero);
                     appliedTaxes.Add(new AppliedTaxResponse(tax.NameEn, tax.NameAr, roundedAmount));
                     totalTaxAmount += roundedAmount;
                 }
@@ -4100,7 +4377,8 @@ namespace OrderingSystem.Application.Services
                     else if (tax.TaxScope == enTaxScope.PerGuest) taxAmount = tax.Amount; // Their guest fee
                     else if (tax.TaxScope == enTaxScope.PerItem) taxAmount = tax.Amount * guestItemsCount; // Their items
                 }
-                guestTaxAmount += Math.Round(taxAmount, 2);
+
+                guestTaxAmount += Math.Round(taxAmount, 2, MidpointRounding.AwayFromZero);
             }
             return guestTaxAmount;
         }
@@ -4133,7 +4411,8 @@ public class TaxCommandService : ITaxCommandService
             return Result<TaxRecords.TaxResponse>.Failure("Names cannot be empty.");
         if (request.Amount < 0)
             return Result<TaxRecords.TaxResponse>.Failure("Amount cannot be negative.");
-
+        if (request.TaxType == enTaxType.Percentage && request.TaxScope != enTaxScope.PerBill)
+            return Result<TaxRecords.TaxResponse>.Failure("Percentage taxes can only be applied to the entire bill.", enErrorType.Validation);
         if (await _taxRepository.TaxExistsByNameAsync(request.NameEn, request.NameAr))
             return Result<TaxRecords.TaxResponse>.Failure("A tax with this name already exists.", enErrorType.Conflict);
 
@@ -4149,6 +4428,9 @@ public class TaxCommandService : ITaxCommandService
     {
         var tax = await _taxRepository.GetTaxByIdAsync(request.TaxId);
         if (tax == null) return Result<TaxRecords.TaxResponse>.Failure("Tax not found.", enErrorType.NotFound);
+
+        if (request.TaxType == enTaxType.Percentage && request.TaxScope != enTaxScope.PerBill)
+            return Result<TaxRecords.TaxResponse>.Failure("Percentage taxes can only be applied to the entire bill.", enErrorType.Validation);
 
         tax.NameAr = request.NameAr;
         tax.NameEn = request.NameEn;
@@ -4386,8 +4668,8 @@ namespace OrderingSystem.Domain.Entities
         public DateTime CreatedAt { get; set; }
 
         // Navigation
-        public TableSession Session { get; set; }
-        public DeviceSession Device { get; set; }
+        public TableSession Session { get; set; } = null!;
+        public DeviceSession Device { get; set; } = null!;
         public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
     }
 }
@@ -4432,6 +4714,7 @@ namespace OrderingSystem.Domain.Entities
         public string QrCode { get; set; } = string.Empty;
         public enTableStatus Status { get; set; }
         public bool IsDeleted { get; set; }
+        public uint Version { get; set; }
 
         // Navigation
         public ICollection<TableSession> Sessions { get; set; } = new List<TableSession>();
@@ -4673,6 +4956,40 @@ namespace OrderingSystem.Domain.Enums
 </Project>
 </file>
 
+<file path="OrderingSystem.Infrastructure/Data/DatabaseErrorMapper.cs">
+﻿using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using OrderingSystem.Application.Interfaces.Data;
+using System;
+
+namespace OrderingSystem.Infrastructure.Data
+{
+    public class PostgresErrorMapper : IDatabaseErrorMapper
+    {
+        public string? MapDbUpdateException(Exception exception)
+        {
+            if (exception is DbUpdateException dbUpdateEx && dbUpdateEx.InnerException is PostgresException pgEx)
+            {
+                return pgEx.SqlState switch
+                {
+                    PostgresErrorCodes.UniqueViolation => "A record with this information already exists.",
+                    PostgresErrorCodes.ForeignKeyViolation => "This operation failed because the record is either currently in use or references missing data.",
+                    PostgresErrorCodes.CheckViolation => "The provided data violates a business rule constraint.",
+                    PostgresErrorCodes.NotNullViolation => "A required piece of information was missing.",
+                    _ => "A database constraint was violated."
+                };
+            }
+            return null;
+        }
+
+        public bool IsConnectionError(Exception exception)
+        {
+            return exception is NpgsqlException;
+        }
+    }
+}
+</file>
+
 <file path="OrderingSystem.Infrastructure/Data/OrderingSystemDbContext.cs">
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderingSystem.Domain.Entities;
@@ -4730,9 +5047,9 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.QrCode).IsRequired().HasMaxLength(255);
                 entity.Property(e => e.IsDeleted).IsRequired();
 
-                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
-                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
-                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
+                entity.Property(e => e.Version)
+                      .IsRowVersion()
+                      .HasColumnName("xmin");
 
                 entity.HasMany(t => t.Sessions)
                       .WithOne(ts => ts.Table)
@@ -4744,16 +5061,12 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.HasIndex(t => new { t.TableNumber, t.FloorNumber })
                       .IsUnique()
                       .HasFilter("\"IsDeleted\" = false");
-        });
+            });
 
             // 3. TableSessions
             modelBuilder.Entity<TableSession>(entity =>
             {
                 entity.HasKey(e => e.TableSessionId);
-
-                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
-                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
-                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
 
                 entity.HasOne(e => e.Table)
                       .WithMany(t => t.Sessions)
@@ -4784,7 +5097,7 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
 
-                 entity.Property(e => e.Emoji).HasMaxLength(50).IsRequired(false);
+                entity.Property(e => e.Emoji).HasMaxLength(50).IsRequired(false);
 
                 entity.Property(e => e.IsDeleted).IsRequired();
 
@@ -4814,10 +5127,6 @@ namespace OrderingSystem.Infrastructure.Data
             {
                 entity.HasKey(e => e.OrderId);
                 entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
-
-                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
-                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
-                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
 
                 entity.HasOne(e => e.Session)
                       .WithMany(s => s.Orders)
@@ -4893,6 +5202,45 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.AppliedAmount).HasPrecision(18, 2);
                 entity.HasOne(e => e.Bill).WithMany(b => b.BillTaxes)
                       .HasForeignKey(e => e.BillId).OnDelete(DeleteBehavior.Cascade);
+            });
+        }
+    }
+}
+</file>
+
+<file path="OrderingSystem.Infrastructure/Data/UnitOfWork.cs">
+﻿using Microsoft.EntityFrameworkCore;
+using OrderingSystem.Application.Interfaces.Data;
+using System;
+using System.Threading.Tasks;
+
+namespace OrderingSystem.Infrastructure.Data
+{
+    public class UnitOfWork : IUnitOfWork
+    {
+        private readonly OrderingSystemDbContext _context;
+
+        public UnitOfWork(OrderingSystemDbContext context)
+        {
+            _context = context;
+        }
+
+        public async Task ExecuteTransactionAsync(Func<Task> action)
+        {
+            var strategy = _context.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                using var transaction = await _context.Database.BeginTransactionAsync();
+                try
+                {
+                    await action();
+                    await transaction.CommitAsync();
+                }
+                catch
+                {
+                    await transaction.RollbackAsync();
+                    throw; // Let the GlobalExceptionHandler catch it
+                }
             });
         }
     }
@@ -5009,6 +5357,31 @@ namespace OrderingSystem.Infrastructure.Notifications
         public async Task NotifyTaxesUpdatedAsync()
         {
             await _hubContext.Clients.All.ReceiveTaxesUpdated("The taxes configuration has been updated.");
+        }
+        public async Task NotifyGuestOfRejectionAsync(Guid guestDeviceSessionId)
+        {
+            await _hubContext.Clients.Group(guestDeviceSessionId.ToString())
+                .ReceiveHostRejectionNotification("Your request to join the table has been rejected.");
+        }
+        public async Task NotifyCashiersOfZombieSessionClearedAsync(Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveZombieSessionCleared(tableSessionId, "A pending session expired and was automatically cleared.");
+        }
+        public async Task NotifyCashiersOfOrderSyncAsync(int orderId, enOrderStatus status)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveCashierOrderSync(orderId, status, $"Order #{orderId} status changed to {status}.");
+        }
+        public async Task NotifyCashiersOfTableSessionSyncAsync(Guid tableSessionId, enSessionStatus status)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveCashierTableSessionSync(tableSessionId, status, $"Table session status changed to {status}.");
+        }
+        public async Task NotifyCashiersOfBillSyncAsync(Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveCashierBillSync(tableSessionId, "The bill request was processed by another cashier.");
         }
     }
 }
@@ -5379,6 +5752,7 @@ namespace OrderingSystem.Infrastructure.Queries
 
 <file path="OrderingSystem.Infrastructure/Queries/OrderQuery.cs">
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.OrdersInterfaces;
@@ -5398,11 +5772,33 @@ namespace OrderingSystem.Infrastructure.Queries
     {
         private readonly OrderingSystemDbContext _context;
         private readonly ITaxCalculationService _taxCalculationService;
+        private readonly IConfiguration _config;
 
-        public OrderQuery(OrderingSystemDbContext context, ITaxCalculationService taxCalculationService)
+        public OrderQuery(OrderingSystemDbContext context, ITaxCalculationService taxCalculationService, IConfiguration config)
         {
             _context = context;
             _taxCalculationService = taxCalculationService;
+            _config = config;
+        }
+
+        // دالة مساعدة لحساب بداية ونهاية اليوم المحلي بدقة وتحويلها لـ UTC
+        private (DateTime StartUtc, DateTime EndUtc) GetLocalDayBoundsUtc()
+        {
+            // سحب المنطقة الزمنية من الإعدادات، مع وضع دمشق كقيمة افتراضية للحماية
+            var tzId = _config["RestaurantSettings:TimeZoneId"] ?? "Asia/Damascus";
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
+
+            // حساب الوقت المحلي الآن
+            var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+
+            // تصفير الوقت للحصول على منتصف الليل المحلي (بداية اليوم)
+            var localStartOfDay = localNow.Date;
+
+            // تحويل البداية والنهاية إلى UTC لاستخدامها في البحث
+            var startUtc = TimeZoneInfo.ConvertTimeToUtc(localStartOfDay, tz);
+            var endUtc = startUtc.AddDays(1);
+
+            return (startUtc, endUtc);
         }
 
         public async Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page)
@@ -5442,11 +5838,13 @@ namespace OrderingSystem.Infrastructure.Queries
 
         public async Task<Result<List<OrderRecords.OrderItemResponse>>> GetTopThreeItemsTodayAsync()
         {
-            var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
+            var bounds = GetLocalDayBoundsUtc();
 
             var rawItems = await _context.OrderItems
                 .AsNoTracking()
-                .Where(oi => oi.Order.CreatedAt.Date == today && oi.Order.OrderStatus != enOrderStatus.Cancelled)
+                .Where(oi => oi.Order.CreatedAt >= bounds.StartUtc &&
+                             oi.Order.CreatedAt < bounds.EndUtc &&
+                             oi.Order.OrderStatus != enOrderStatus.Cancelled)
                 .Where(oi => !oi.MenuItem.IsDeleted)
                 .GroupBy(oi => new
                 {
@@ -5499,10 +5897,10 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             try
             {
-                var today = DateTime.SpecifyKind(DateTime.Today, DateTimeKind.Utc);
+                var bounds = GetLocalDayBoundsUtc();
 
                 var count = await _context.Orders
-                    .Where(o => o.CreatedAt.Date == today)
+                    .Where(o => o.CreatedAt >= bounds.StartUtc && o.CreatedAt < bounds.EndUtc)
                     .CountAsync();
 
                 return Result<int>.Success(count);
@@ -5551,6 +5949,7 @@ namespace OrderingSystem.Infrastructure.Queries
         public async Task<Result<PagedResponse<HistoricalBillResponse>>> GetHistoricalBillsAsync(DateTime startDate, DateTime endDate, PageDTO page)
         {
             var query = _context.Bills
+                .IgnoreQueryFilters()
                 .Include(b => b.TableSession)
                     .ThenInclude(ts => ts.Table)
                 .Include(b => b.BillItems)
@@ -5652,7 +6051,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     t.Status,
                     (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
                         ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
-                        : null
+                        : null,
+                    t.Version
                 ))
                 .FirstOrDefaultAsync();
             return table;
@@ -5676,7 +6076,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     t.Status,
                     (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
                         ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
-                        : null
+                        : null,
+                    EF.Property<uint>(t, "Version")
                 ))
                 .ToListAsync();
 
@@ -5699,7 +6100,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     t.Status,
                     (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
                         ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
-                        : null
+                        : null,
+                    t.Version
                 ))
                 .ToListAsync();
 
@@ -5725,7 +6127,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     t.Status,
                     (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
                         ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
-                        : null
+                        : null,
+                    t.Version
                 ))
                 .ToListAsync();
 
@@ -5890,12 +6293,15 @@ namespace OrderingSystem.Infrastructure.Queries
             var guestBills = new List<GuestBillResponse>();
             int totalItemsCount = 0;
 
+            var approvedGuestsCount = session.Devices.Count(d => d.IsApproved);
+
             foreach (var device in session.Devices)
             {
                 var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
                 if (!deviceOrders.Any()) continue;
 
                 decimal guestSubTotal = 0;
+                int guestItemsCount = 0;
 
                 var billItems = deviceOrders.SelectMany(o => o.OrderItems)
                     .GroupBy(oi => oi.MenuItemId)
@@ -5904,8 +6310,10 @@ namespace OrderingSystem.Infrastructure.Queries
                         var first = g.First();
                         var qty = g.Sum(i => i.Quantity);
                         var itemTotal = qty * first.UnitPrice;
+
                         guestSubTotal += itemTotal;
                         totalItemsCount += qty;
+                        guestItemsCount += qty;
 
                         return new BillItemResponse(
                             first.MenuItemId,
@@ -5918,12 +6326,22 @@ namespace OrderingSystem.Infrastructure.Queries
                     }).ToList();
 
                 totalSubTotal += guestSubTotal;
-                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, billItems, guestSubTotal));
+
+                // --- 3. CALCULATE SPLIT TOTALS & PASS TO CONSTRUCTOR ---
+                decimal guestTax = _taxCalculationService.CalculateGuestTaxAmount(
+                                    guestSubTotal,
+                                    guestItemsCount,
+                                    approvedGuestsCount,
+                                    activeTaxes);
+
+                decimal guestGrandTotal = guestSubTotal + guestTax;
+
+                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, billItems, guestSubTotal, guestTax, guestGrandTotal));
             }
 
             var uniqueGuests = session.Devices.Count;
 
-            var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, uniqueGuests, totalItemsCount, activeTaxes);
+            var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, approvedGuestsCount, totalItemsCount, activeTaxes);
             var grandTotal = totalSubTotal + taxResult.TotalTaxAmount;
 
             return new BillSummaryResponse(
@@ -6055,6 +6473,7 @@ using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -6128,6 +6547,16 @@ namespace OrderingSystem.Infrastructure.Repositories
                 .AnyAsync(c => c.NameEn.ToLower() == nameEn.ToLower() ||
                                c.NameAr.ToLower() == nameAr.ToLower());
         }
+
+        public async Task<bool> HasActiveOrdersAsync(int categoryId)
+        {
+            // Checks if any menu item belonging to this category is currently
+            // locked inside an order that hasn't been served or cancelled yet.
+            return await _dbContext.OrderItems
+                .AnyAsync(oi => oi.MenuItem.CategoryId == categoryId &&
+                               (oi.Order.OrderStatus == enOrderStatus.Pending ||
+                                oi.Order.OrderStatus == enOrderStatus.Preparing));
+        }
     }
 }
 </file>
@@ -6154,6 +6583,7 @@ namespace OrderingSystem.Infrastructure.Repositories
         {
             return await _context.SessionDevices
                     .Include(ds => ds.TableSession)
+                        .ThenInclude(ts => ts.Table)
                     .FirstOrDefaultAsync(ds => ds.DeviceSessionId == deviceSessionId);
         }
 
@@ -6168,6 +6598,12 @@ namespace OrderingSystem.Infrastructure.Repositories
             _context.SessionDevices.Update(session);
             await _context.SaveChangesAsync();
         }
+
+        public async Task DeleteDeviceSessionAsync(DeviceSession session)
+        {
+            _context.SessionDevices.Remove(session);
+            await _context.SaveChangesAsync();
+        }
     }
 }
 </file>
@@ -6178,6 +6614,7 @@ using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -6239,6 +6676,19 @@ namespace OrderingSystem.Infrastructure.Repositories
                               (m.NameEn.ToLower() == nameEn.ToLower() ||
                                m.NameAr.ToLower() == nameAr.ToLower()));
         }
+        public async Task<bool> HasActiveOrdersAsync(int menuItemId)
+        {
+            return await _dbContext.OrderItems
+                .AnyAsync(oi => oi.MenuItemId == menuItemId &&
+                               (oi.Order.OrderStatus == enOrderStatus.Pending ||
+                                oi.Order.OrderStatus == enOrderStatus.Preparing));
+        }
+        public async Task<IEnumerable<MenuItem>> GetMenuItemsByIdsAsync(IEnumerable<int> menuItemIds)
+        {
+            return await _dbContext.MenuItems
+                .Where(m => menuItemIds.Contains(m.MenuItemId))
+                .ToListAsync();
+        }
     }
 }
 </file>
@@ -6272,7 +6722,8 @@ namespace OrderingSystem.Infrastructure.Repositories
         {
             return await _context.Orders
                 .Include(o => o.OrderItems)
-                .ThenInclude(oi => oi.MenuItem)
+                    .ThenInclude(oi => oi.MenuItem)
+                .Include(o => o.Device)
                 .FirstOrDefaultAsync(o => o.OrderId == orderId);
         }
 
@@ -6287,6 +6738,22 @@ namespace OrderingSystem.Infrastructure.Repositories
             order.OrderStatus = enOrderStatus.Cancelled;
 
             _context.Orders.Update(order);
+            await _context.SaveChangesAsync();
+        }
+        public async Task HardDeleteOrderAsync(Order order)
+        {
+            _context.Orders.Remove(order);
+            await _context.SaveChangesAsync();
+        }
+        public async Task UpdateOrdersAsync(IEnumerable<Order> orders)
+        {
+            _context.Orders.UpdateRange(orders);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task HardDeleteOrdersAsync(IEnumerable<Order> orders)
+        {
+            _context.Orders.RemoveRange(orders);
             await _context.SaveChangesAsync();
         }
     }
@@ -6317,9 +6784,16 @@ namespace OrderingSystem.Infrastructure.Repositories
             await _context.SaveChangesAsync();
         }
 
-        public async Task UpdateTableAsync(Table table)
+        public async Task UpdateTableAsync(Table table, uint? originalVersion = null)
         {
             _context.Tables.Update(table);
+
+            // Only override the tracker if the frontend sent a specific version to check against
+            if (originalVersion.HasValue)
+            {
+                _context.Entry(table).Property(e => e.Version).OriginalValue = originalVersion.Value;
+            }
+
             await _context.SaveChangesAsync();
         }
 
@@ -6383,10 +6857,11 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task<TableSession?> GetActiveTableSessionWithOrdersAndDevicesAsync(Guid tableSessionId)
         {
             return await _context.TableSessions
-            .Include(s => s.Orders)
-                .ThenInclude(o => o.OrderItems).ThenInclude(oi => oi.MenuItem)
-            .Include(s => s.Devices)
-            .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId && s.ClosedAt == null);
+                .IgnoreQueryFilters() // Bypasses the IsDeleted filter so legacy checkout data maps correctly
+                .Include(s => s.Orders)
+                    .ThenInclude(o => o.OrderItems).ThenInclude(oi => oi.MenuItem)
+                .Include(s => s.Devices)
+                .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId && s.ClosedAt == null);
         }
 
         public async Task AddSessionAsync(TableSession session)
@@ -6412,6 +6887,16 @@ namespace OrderingSystem.Infrastructure.Repositories
         {
             _context.TableSessions.Remove(session);
             await _context.SaveChangesAsync();
+        }
+
+        public async Task<List<TableSession>> GetExpiredPendingSessionsAsync(DateTime cutoffTime)
+        {
+            return await _context.TableSessions
+                .Include(s => s.Table)
+                .Where(s => s.Status == enSessionStatus.PendingActivation
+                         && s.ClosedAt == null
+                         && s.CreatedAt <= cutoffTime)
+                .ToListAsync();
         }
     }
 }

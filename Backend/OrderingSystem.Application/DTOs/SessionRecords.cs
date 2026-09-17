@@ -10,11 +10,10 @@ namespace OrderingSystem.Application.DTOs
     // Command Payloads
     public record ProcessQrCodeRequest([Required] string qrCode);
     public record ApproveJoiningSessionRequest([Required] Guid deviceSessionId);
-    public record ActivateTableSessionRequest([Required] Guid tableSessionId); 
+    public record ActivateTableSessionRequest([Required] Guid tableSessionId);
     public record DeactivateSessionByAdminRequest([Required] int tableId);
     public record RequestBillRequest([Required] Guid tableSessionId);
     public record AppliedTaxResponse(string NameEn, string NameAr, decimal Amount);
-
 
     // Query/Command Response Payloads
     public record DeviceSessionResponse(Guid DeviceSessionId, enDeviceRole DeviceRole, bool IsApproved);
@@ -26,7 +25,7 @@ namespace OrderingSystem.Application.DTOs
         Guid TableSessionId,
         List<GuestBillResponse> GuestBills,
         decimal TotalSubTotal,
-        List<AppliedTaxResponse> AppliedTaxes, 
+        List<AppliedTaxResponse> AppliedTaxes,
         decimal GrandTotal
     );
     public record SessionPollingResponse(enSessionStatus SessionStatus, bool IsDeviceApproved);

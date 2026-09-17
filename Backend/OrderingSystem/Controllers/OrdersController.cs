@@ -24,7 +24,12 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
-            var result = await _orderCommandService.AddOrderAsync(request);
+            if (!CurrentDeviceSessionId.HasValue)
+            {
+                return Unauthorized(new { error = "Invalid or missing device session." });
+            }
+
+            var result = await _orderCommandService.AddOrderAsync(request, CurrentDeviceSessionId.Value);
 
             return HandleCreatedResult(
                 result,

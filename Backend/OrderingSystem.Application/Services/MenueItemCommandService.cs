@@ -24,10 +24,6 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("Invalid CategoryId.");
             }
-            if (string.IsNullOrEmpty(imageUrl))
-            {
-                return Result<MenuRecords.MenuItemResponse>.Failure("ImageUrl cannot be null or empty.");
-            }
             if (string.IsNullOrEmpty(nameAr) || string.IsNullOrEmpty(nameEn))
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("NameAr and NameEn cannot be null or empty.");
@@ -138,11 +134,19 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<bool>.Failure($"Menu item with ID {request.MenuItemId} not found.");
             }
+            bool hasActiveOrders = await _menuItemRepository.HasActiveOrdersAsync(request.MenuItemId);
+            if (hasActiveOrders)
+            {
+                return Result<bool>.Failure(
+                    "Cannot delete this menu item because it is currently part of an active order.",
+                    enErrorType.Conflict);
+            }
             await _menuItemRepository.DeleteMenuItemAsync(existingMenuItem);
             await _realTimeNotifier.NotifyMenuUpdatedAsync();
 
             return Result<bool>.Success(true);
         }
+
         
     }
 }

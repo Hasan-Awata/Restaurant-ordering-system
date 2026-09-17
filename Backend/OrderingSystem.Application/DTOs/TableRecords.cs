@@ -11,10 +11,11 @@ namespace OrderingSystem.Application.DTOs
         [Required] int TableNumber, 
         [Required] int FloorNumber);
     public record UpdateTableRequest(
-        [Required] int TableId, 
-        [Required] int TableNumber, 
+        [Required] int TableId,
+        [Required] int TableNumber,
         [Required] int FloorNumber,
-        [Required] enTableStatus Status);
+        [Required] enTableStatus Status,
+        [Required] uint Version); 
 
     // Query/Command Response Payloads
     public record TableResponse(
@@ -23,8 +24,9 @@ namespace OrderingSystem.Application.DTOs
         int FloorNumber,
         string QrCode,
         enTableStatus Status,
-        Guid? TableSessionId = null 
+        Guid? TableSessionId = null,
+        uint Version = 0 
     );
-    
+
     public record PendingTableResponse(int TableId, int TableNumber, int FloorNumber, string QrCode, enTableStatus Status, Guid TableSessionId, DateTime? CreatedAt);
 }

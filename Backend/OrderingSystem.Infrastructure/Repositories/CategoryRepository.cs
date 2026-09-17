@@ -3,6 +3,7 @@ using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Infrastructure.Data;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
+using OrderingSystem.Domain.Enums;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -75,6 +76,16 @@ namespace OrderingSystem.Infrastructure.Repositories
                 .AsNoTracking()
                 .AnyAsync(c => c.NameEn.ToLower() == nameEn.ToLower() ||
                                c.NameAr.ToLower() == nameAr.ToLower());
+        }
+
+        public async Task<bool> HasActiveOrdersAsync(int categoryId)
+        {
+            // Checks if any menu item belonging to this category is currently 
+            // locked inside an order that hasn't been served or cancelled yet.
+            return await _dbContext.OrderItems
+                .AnyAsync(oi => oi.MenuItem.CategoryId == categoryId &&
+                               (oi.Order.OrderStatus == enOrderStatus.Pending ||
+                                oi.Order.OrderStatus == enOrderStatus.Preparing));
         }
     }
 }

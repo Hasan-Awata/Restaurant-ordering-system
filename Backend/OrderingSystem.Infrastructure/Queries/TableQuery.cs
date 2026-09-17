@@ -61,7 +61,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     t.Status,
                     (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
                         ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
-                        : null
+                        : null,
+                    t.Version 
                 ))
                 .FirstOrDefaultAsync();
             return table;
@@ -85,7 +86,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     t.Status,
                     (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
                         ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
-                        : null
+                        : null,
+                    EF.Property<uint>(t, "Version") 
                 ))
                 .ToListAsync();
 
@@ -108,7 +110,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     t.Status,
                     (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
                         ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
-                        : null
+                        : null,
+                    t.Version 
                 ))
                 .ToListAsync();
 
@@ -134,7 +137,8 @@ namespace OrderingSystem.Infrastructure.Queries
                     t.Status,
                     (t.Status == enTableStatus.Occupied || t.Status == enTableStatus.Billing)
                         ? t.Sessions.Where(s => s.ClosedAt == null).Select(s => (Guid?)s.TableSessionId).FirstOrDefault()
-                        : null
+                        : null,
+                    t.Version 
                 ))
                 .ToListAsync();
 

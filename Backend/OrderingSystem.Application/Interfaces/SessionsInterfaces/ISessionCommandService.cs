@@ -16,5 +16,7 @@ namespace OrderingSystem.Application.Interfaces.TableSessionInterfaces
         public Task<Result> RequestBillAsync(Guid tableSessionId, Guid deviceSessionId);
         public Task<Result> DismissTableSessionAsync(Guid tableSessionId);
         public Task<Result> DismissBillAsync(Guid tableSessionId);
+        public Task<Result> CleanupZombieSessionsAsync(TimeSpan expirationWindow);
+        public Task<Result> RejectJoiningRequestAsync(Guid guestDeviceSessionId, Guid hostDeviceSessionId);
     }
 }
