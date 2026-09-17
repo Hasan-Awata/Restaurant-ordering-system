@@ -135,7 +135,7 @@ def gather_project_code(root_dir, output_file, include_migrations=False):
     print("=" * 50)
 
 if __name__ == "__main__":
-    project_root = r"C:\Users\ASUS\source\repos\OrderingSystem\Backend" 
+    project_root = r"C:\MyFile\Project\OrderingSystem\Backend" 
     output_filename = "ai_net_project_context.xml"
     
     # Toggle `include_migrations=True` if you need Entity Framework migrations in context
