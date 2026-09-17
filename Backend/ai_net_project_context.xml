@@ -424,21 +424,30 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         ValidIssuer = jwtSettings["Issuer"],
         ValidAudience = jwtSettings["Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
+        RoleClaimType = "role"
     };
 
     options.Events = new JwtBearerEvents
     {
         OnMessageReceived = context =>
         {
-            // 1. Staff query string extraction (for Swagger/SignalR)
+            // 1. If an explicit Authorization header exists (Staff / Mobile App), NEVER touch it
+            if (!string.IsNullOrEmpty(context.Request.Headers.Authorization))
+            {
+                return Task.CompletedTask;
+            }
+
+            // 2. Hub-specific Query String fallback (SignalR handshake)
             var accessToken = context.Request.Query["access_token"];
             if (!string.IsNullOrEmpty(accessToken))
             {
                 context.Token = accessToken;
+                return Task.CompletedTask;
             }
-            // 2. Customer cookie extraction (NOW APPLIES GLOBALLY)
-            else if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
+
+            // 3. Customer Cookie fallback (Only evaluated if no header was sent)
+            if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
             {
                 context.Token = cookieToken;
             }
@@ -449,7 +458,13 @@ builder.Services.AddAuthentication(options =>
         OnTokenValidated = context =>
         {
             var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
-            var tokenString = context.SecurityToken is JwtSecurityToken jwt ? jwt.RawData : string.Empty;
+
+            var tokenString = context.SecurityToken switch
+            {
+                System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwt => jwt.RawData,
+                Microsoft.IdentityModel.JsonWebTokens.JsonWebToken jsonToken => jsonToken.EncodedToken,
+                _ => string.Empty
+            };
 
             // Check if individual token was logged out
             if (!string.IsNullOrEmpty(tokenString) && cache.TryGetValue($"blacklist_{tokenString}", out _))
