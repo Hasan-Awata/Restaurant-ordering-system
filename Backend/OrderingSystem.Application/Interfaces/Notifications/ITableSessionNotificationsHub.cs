@@ -14,6 +14,17 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task ReceiveNewOrderNotification(int orderId, Guid tableSessionId, string message);
         public Task ReceiveOrderStatusUpdate(int orderId, enOrderStatus status, string message);
         public Task ReceiveBillRequestNotification(Guid tableSessionId, int tableNumber, string message);
-        public Task ReceiveBillApprovalNotification(string message);
+        public Task ReceiveMenuUpdated(string message);
+        public Task ReceiveActivationDismissed(string message);
+        public Task ReceiveBillRejected(string message);
+        public Task ReceiveOrderRejected(int orderId, string message);
+        public Task ReceiveSessionEnded(string message);
+        public Task ReceiveBillRequested(string tableSessionId);
+        public Task ReceiveTaxesUpdated(string message);
+        public Task ReceiveHostRejectionNotification(string message);
+        public Task ReceiveZombieSessionCleared(Guid tableSessionId, string message);
+        public Task ReceiveCashierOrderSync(int orderId, enOrderStatus status, string message);
+        public Task ReceiveCashierTableSessionSync(Guid tableSessionId, enSessionStatus status, string message);
+        public Task ReceiveCashierBillSync(Guid tableSessionId, string message);
     }
 }

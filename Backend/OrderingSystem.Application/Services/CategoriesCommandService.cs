@@ -1,5 +1,6 @@
 ﻿using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Category;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Mappers; 
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
@@ -10,6 +11,7 @@ namespace OrderingSystem.Application.Services
 {
     public class CategoryCommandService : ICategoryCommandService
     {
+        private readonly IRealTimeNotifier _realTimeNotifier;
          private Result<CategoriesRecords.CategoryResponse> ValidateCategoryRequest(string nameEn, string nameAr)
         {
             if (string.IsNullOrEmpty(nameAr) || string.IsNullOrEmpty(nameEn))
@@ -22,9 +24,11 @@ namespace OrderingSystem.Application.Services
 
         private readonly ICategoryRepository _categoryRepository;
 
-        public CategoryCommandService(ICategoryRepository categoryRepository)
+        public CategoryCommandService(ICategoryRepository categoryRepository, IRealTimeNotifier realTimeNotifier)
         {
             _categoryRepository = categoryRepository;
+            _realTimeNotifier = realTimeNotifier;
+
         }
 
         public async Task<Result<CategoriesRecords.CategoryResponse>> AddCategoryAsync(CategoriesRecords.AddCategoryRequest request)
@@ -56,6 +60,7 @@ namespace OrderingSystem.Application.Services
             }
 
             await _categoryRepository.AddCategoryAsync(category);
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
 
             var response = category.ToResponse();
             return Result<CategoriesRecords.CategoryResponse>.Success(response);
@@ -89,6 +94,7 @@ namespace OrderingSystem.Application.Services
             existingCategory.IsAvailable = request.IsAvailable;
 
             await _categoryRepository.UpdateCategoryAsync(existingCategory);
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
 
             var response = existingCategory.ToResponse();
             return Result<CategoriesRecords.CategoryResponse>.Success(response);
@@ -106,8 +112,18 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<bool>.Failure($"Category with ID {request.CategoryId} not found.", enErrorType.NotFound);
             }
+            
+            bool hasActiveOrders = await _categoryRepository.HasActiveOrdersAsync(request.CategoryId);
+            if (hasActiveOrders)
+            {
+                return Result<bool>.Failure(
+                    "Cannot delete this category because it contains menu items that are currently part of active orders being prepared.",
+                    enErrorType.Conflict);
+            }
 
             await _categoryRepository.DeleteCategoryAsync(existingCategory);
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             return Result<bool>.Success(true);
         }
     }

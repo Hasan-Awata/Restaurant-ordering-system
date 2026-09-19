@@ -26,7 +26,8 @@ namespace OrderingSystem.Infrastructure.Repositories
         {
             return await _context.Orders
                 .Include(o => o.OrderItems)
-                .ThenInclude(oi => oi.MenuItem) 
+                    .ThenInclude(oi => oi.MenuItem)
+                .Include(o => o.Device)
                 .FirstOrDefaultAsync(o => o.OrderId == orderId);
         }
 
@@ -41,6 +42,22 @@ namespace OrderingSystem.Infrastructure.Repositories
             order.OrderStatus = enOrderStatus.Cancelled;
 
             _context.Orders.Update(order);
+            await _context.SaveChangesAsync();
+        }
+        public async Task HardDeleteOrderAsync(Order order)
+        {
+            _context.Orders.Remove(order);
+            await _context.SaveChangesAsync();
+        }
+        public async Task UpdateOrdersAsync(IEnumerable<Order> orders)
+        {
+            _context.Orders.UpdateRange(orders);
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task HardDeleteOrdersAsync(IEnumerable<Order> orders)
+        {
+            _context.Orders.RemoveRange(orders);
             await _context.SaveChangesAsync();
         }
     }

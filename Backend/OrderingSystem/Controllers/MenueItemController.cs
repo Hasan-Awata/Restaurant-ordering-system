@@ -23,7 +23,7 @@ namespace OrderingSystem.WebApi.Controllers
             _menuItemQueryService = menuItemQueryService;
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpPost]
         public async Task<IActionResult> AddMenuItem([FromBody] MenuRecords.AddMenuItemRequest request)
         {
@@ -36,7 +36,7 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpPut]
         public async Task<IActionResult> UpdateMenuItem([FromBody] MenuRecords.UpdateMenuItemRequest request)
         {
@@ -44,7 +44,7 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "AdminOnly")]
         [HttpDelete]
         public async Task<IActionResult> DeleteMenuItem([FromBody] MenuRecords.DeleteMenuItemRequest request)
         {
@@ -58,32 +58,39 @@ namespace OrderingSystem.WebApi.Controllers
             var result = await _menuItemQueryService.GetItemByIdAsync(id);
             return HandleResult(result);
         }
-
+        
         [HttpGet("details/{id}")]
         public async Task<IActionResult> GetMenuItem(int id)
         {
             var result = await _menuItemQueryService.GetMenuItemAsync(id);
             return HandleResult(result);
         }
-
+       
         [HttpGet]
         public async Task<IActionResult> GetAllMenuItems([FromQuery] PageDTO page)
         {
             var result = await _menuItemQueryService.GetAllMenuItemsAsync(page);
             return HandleResult(result);
         }
-
+        
         [HttpGet("category/{categoryId}")]
         public async Task<IActionResult> GetAllMenuItemsByCategory(int categoryId, [FromQuery] PageDTO page)
         {
             var result = await _menuItemQueryService.GetAllMenuItemsByCategoryAsync(categoryId, page);
             return HandleResult(result);
         }
-
+        
         [HttpGet("available")]
         public async Task<IActionResult> GetAllAvailableMenuItems([FromQuery] PageDTO page)
         {
             var result = await _menuItemQueryService.GetAllAvailableMenuItemsAsync(page);
+            return HandleResult(result);
+        }
+
+        [HttpGet("search")]
+        public async Task<IActionResult> SearchMenuItems([FromQuery] string query, [FromQuery] PageDTO page)
+        {
+            var result = await _menuItemQueryService.SearchMenuItemsAsync(query, page);
             return HandleResult(result);
         }
     }

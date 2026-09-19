@@ -8,7 +8,7 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
     public interface ITableRepository
     {
         Task AddTableAsync(Table table);
-        Task UpdateTableAsync(Table table);
+        Task UpdateTableAsync(Table table, uint? originalVersion = null); 
         Task DeleteTableAsync(Table table);
         Task<bool> ExistsAsync(int tableNumber, int floor);
 

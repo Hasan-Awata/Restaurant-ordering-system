@@ -13,6 +13,7 @@ namespace OrderingSystem.Domain.Entities
         public string QrCode { get; set; } = string.Empty;
         public enTableStatus Status { get; set; }
         public bool IsDeleted { get; set; }
+        public uint Version { get; set; } 
 
         // Navigation
         public ICollection<TableSession> Sessions { get; set; } = new List<TableSession>();

@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Application.Interfaces.TaxesInterfaces;
 using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
@@ -11,10 +12,12 @@ namespace OrderingSystem.Infrastructure.Queries
     public class TableSessionQuery : ITableSessionQuery
     {
         private readonly OrderingSystemDbContext _context;
+        private readonly ITaxCalculationService _taxCalculationService;
 
-        public TableSessionQuery(OrderingSystemDbContext context)
+        public TableSessionQuery(OrderingSystemDbContext context, ITaxCalculationService taxCalculationService)
         {
             _context = context;
+            _taxCalculationService = taxCalculationService;
         }
 
         public async Task<TableSessionResponse?> GetActiveSessionByTableAsync(int tableId)
@@ -37,53 +40,92 @@ namespace OrderingSystem.Infrastructure.Queries
         {
             var session = await _context.TableSessions
                 .AsNoTracking()
-                .Include(s => s.Devices)
-                .Include(s => s.Orders.Where(o => o.OrderStatus != enOrderStatus.Cancelled))
+                .Include(s => s.Orders.Where(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served))
                     .ThenInclude(o => o.OrderItems)
                         .ThenInclude(oi => oi.MenuItem)
+                .Include(s => s.Devices)
                 .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId);
 
             if (session == null) return null;
 
-            var guestBills = new List<GuestBillResponse>();
+            var activeTaxes = await _context.Taxes
+                .AsNoTracking()
+                .Where(t => t.IsActive && !t.IsDeleted)
+                .ToListAsync();
+
             decimal totalSubTotal = 0;
+            var guestBills = new List<GuestBillResponse>();
+            int totalItemsCount = 0;
+
+            var approvedGuestsCount = session.Devices.Count(d => d.IsApproved);
 
             foreach (var device in session.Devices)
             {
                 var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
                 if (!deviceOrders.Any()) continue;
 
-                // Flatten items for this device, group by MenuItemId to sum quantities of identical items
-                var groupedItems = deviceOrders
-                    .SelectMany(o => o.OrderItems)
+                decimal guestSubTotal = 0;
+                int guestItemsCount = 0; 
+
+                var billItems = deviceOrders.SelectMany(o => o.OrderItems)
                     .GroupBy(oi => oi.MenuItemId)
-                    .Select(g => new BillItemResponse(
-                        g.Key,
-                        g.First().MenuItem?.NameEn ?? "Deleted Item",
-                        g.First().MenuItem?.NameAr ?? "عنصر محذوف",
-                        g.Sum(oi => oi.Quantity),
-                        g.First().UnitPrice, // Using the historical price saved on the OrderItem
-                        g.Sum(oi => oi.Quantity * oi.UnitPrice)
-                    )).ToList();
+                    .Select(g =>
+                    {
+                        var first = g.First();
+                        var qty = g.Sum(i => i.Quantity);
+                        var itemTotal = qty * first.UnitPrice;
 
-                decimal subTotal = groupedItems.Sum(i => i.TotalPrice);
-                totalSubTotal += subTotal;
+                        guestSubTotal += itemTotal;
+                        totalItemsCount += qty;
+                        guestItemsCount += qty; 
 
-                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, groupedItems, subTotal));
+                        return new BillItemResponse(
+                            first.MenuItemId,
+                            first.MenuItem?.NameEn ?? "Deleted",
+                            first.MenuItem?.NameAr ?? "محذوف",
+                            qty,
+                            first.UnitPrice,
+                            itemTotal
+                        );
+                    }).ToList();
+
+                totalSubTotal += guestSubTotal;
+
+                // --- 3. CALCULATE SPLIT TOTALS & PASS TO CONSTRUCTOR ---
+                decimal guestTax = _taxCalculationService.CalculateGuestTaxAmount(
+                                    guestSubTotal,
+                                    guestItemsCount,
+                                    approvedGuestsCount,
+                                    activeTaxes);
+
+                decimal guestGrandTotal = guestSubTotal + guestTax;
+
+                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, billItems, guestSubTotal, guestTax, guestGrandTotal));
             }
 
-            // TODO: Replace this with an actual database fetch from the future Taxes table
-            decimal taxRate = 0.15m;
-            decimal taxAmount = totalSubTotal * taxRate;
-            decimal grandTotal = totalSubTotal + taxAmount;
+            var uniqueGuests = session.Devices.Count;
+
+            var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, approvedGuestsCount, totalItemsCount, activeTaxes);
+            var grandTotal = totalSubTotal + taxResult.TotalTaxAmount;
 
             return new BillSummaryResponse(
-                session.TableSessionId,
+                tableSessionId,
                 guestBills,
                 totalSubTotal,
-                taxAmount,
+                taxResult.AppliedTaxes,
                 grandTotal
             );
+        }
+        public async Task<SessionPollingResponse?> GetSessionPollingStatusAsync(Guid tableSessionId, Guid deviceSessionId)
+        {
+            return await _context.SessionDevices
+                .AsNoTracking()
+                .Where(d => d.DeviceSessionId == deviceSessionId && d.TableSessionId == tableSessionId)
+                .Select(d => new SessionPollingResponse(
+                    d.TableSession.Status,
+                    d.IsApproved
+                ))
+                .FirstOrDefaultAsync();
         }
     }
 }

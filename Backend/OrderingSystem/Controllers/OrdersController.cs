@@ -24,7 +24,12 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] OrderRecords.CreateOrderRequest request)
         {
-            var result = await _orderCommandService.AddOrderAsync(request);
+            if (!CurrentDeviceSessionId.HasValue)
+            {
+                return Unauthorized(new { error = "Invalid or missing device session." });
+            }
+
+            var result = await _orderCommandService.AddOrderAsync(request, CurrentDeviceSessionId.Value);
 
             return HandleCreatedResult(
                 result,
@@ -33,16 +38,16 @@ namespace OrderingSystem.WebApi.Controllers
             );
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpPut("{id}/approve")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> ApproveOrder(int id)
         {
             var result = await _orderCommandService.ApproveOrderAsync(id);
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")]
         [HttpDelete("{id}/cancel")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> CancelOrder(int id)
         {
             var result = await _orderCommandService.CancelOrderAsync(id);
@@ -61,12 +66,24 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin,Cashier")] 
         [HttpGet("pending")]
+        [Authorize(Policy = "RequireStaff")]
         public async Task<IActionResult> GetPendingOrders([FromQuery] PageDTO page)
         {
             var result = await _orderQuery.GetPendingOrdersAsync(page);
             return HandleResult(result);
         }
+
+        [HttpGet("historical-bills")]
+        [Authorize(Policy = "RequireStaff")]
+        public async Task<IActionResult> GetHistoricalBills(
+         [FromQuery] DateTime startDate,
+         [FromQuery] DateTime endDate,
+             [FromQuery] PageDTO page)
+        {
+            var result = await _orderQuery.GetHistoricalBillsAsync(startDate, endDate, page);
+            return HandleResult(result);
+        }
+
     }
 }

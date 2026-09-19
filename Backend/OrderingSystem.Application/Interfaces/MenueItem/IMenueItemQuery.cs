@@ -14,7 +14,7 @@ namespace OrderingSystem.Application.Interfaces.MenueItem
         public Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllMenuItemsAsync(PageDTO page);
          public Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> GetAllAvailableMenuItemsAsync(PageDTO page);
         public Task<Result<MenuRecords.MenuItemResponse>> GetItemByIdAsync(int menuItemId);
-       
+       public Task<Result<PagedResponse<MenuRecords.MenuItemResponse>>> SearchMenuItemsAsync(string query, PageDTO page);
 
 
 

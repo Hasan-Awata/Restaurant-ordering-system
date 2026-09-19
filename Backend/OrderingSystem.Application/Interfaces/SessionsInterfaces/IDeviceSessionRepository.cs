@@ -10,5 +10,6 @@ namespace OrderingSystem.Application.Interfaces.SessionsInterfaces
         public Task<DeviceSession?> GetDeviceSessionByIdAsync(Guid deviceSessionId);
         public Task AddSessionAsync(DeviceSession session);
         public Task UpdateDeviceSessionAsync(DeviceSession session);
+        public Task DeleteDeviceSessionAsync(DeviceSession session);
     }
 }

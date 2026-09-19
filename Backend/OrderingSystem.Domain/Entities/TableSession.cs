@@ -16,6 +16,7 @@ namespace OrderingSystem.Domain.Entities
         // Navigation Properties
         // Using null! tells the compiler EF Core will handle populating this when loaded
         public Table Table { get; set; } = null!;
+        public Bill FinalBill { get; set; } = null!;
 
         // Initializing collections is correct and prevents NullReferenceExceptions
         public ICollection<DeviceSession> Devices { get; set; } = new List<DeviceSession>();

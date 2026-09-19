@@ -1,5 +1,6 @@
 ﻿using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
+using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
 using System;
 using System.Collections.Generic;
@@ -9,6 +10,7 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
 {
     public interface ITableQuery
     {
+        public Task<Result<int>> GetCountOfOccupiedTables();
         public Task<string?> GetTableQrCodeAsync(int tableId);
         public Task<TableResponse?> GetTableByIdAsync(int tableId);
         public Task<TableResponse?> GetTableByNumberAsync(int tableNumber, int floorNumber);
@@ -16,5 +18,8 @@ namespace OrderingSystem.Application.Interfaces.TableInterfaces
         public Task<PagedResponse<TableResponse>> GetAllTablesAsync(PageDTO page);
         public Task<PagedResponse<TableResponse>> GetAllTablesByStatusAsync(PageDTO page, enTableStatus tableStatus);
         public Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page);
+        public Task<PagedResponse<PendingTableResponse>> GetAllBillingTablesAsync(PageDTO page);
+        public Task  <Result<int>> GetCountTable();
+
     }
 }

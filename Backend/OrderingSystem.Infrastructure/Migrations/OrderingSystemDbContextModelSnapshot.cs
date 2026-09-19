@@ -22,6 +22,110 @@ namespace OrderingSystem.Infrastructure.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Bill", b =>
+                {
+                    b.Property<int>("BillId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("BillId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("GrandTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<Guid>("TableSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TotalSubTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("TotalTax")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("BillId");
+
+                    b.HasIndex("TableSessionId")
+                        .IsUnique();
+
+                    b.ToTable("Bills");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.BillItem", b =>
+                {
+                    b.Property<int>("BillItemId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("BillItemId"));
+
+                    b.Property<int>("BillId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("MenuItemId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("TotalPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("BillItemId");
+
+                    b.HasIndex("BillId");
+
+                    b.ToTable("BillItems");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.BillTax", b =>
+                {
+                    b.Property<int>("BillTaxId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("BillTaxId"));
+
+                    b.Property<decimal>("AppliedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int>("BillId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TaxNameAr")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TaxNameEn")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("BillTaxId");
+
+                    b.HasIndex("BillId");
+
+                    b.ToTable("BillTaxes");
+                });
+
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
                 {
                     b.Property<int>("CategoryId")
@@ -88,9 +192,9 @@ namespace OrderingSystem.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("ImageUrl")
-                        .IsRequired()
-                        .HasColumnType("text");
+                    b.Property<string>("Emoji")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<bool>("IsAvailable")
                         .HasColumnType("boolean");
@@ -114,7 +218,7 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("MenuItemId");
 
-                    b.HasIndex("CategoryId");
+                    b.HasIndex("CategoryId", "IsAvailable", "IsDeleted");
 
                     b.ToTable("MenuItems");
                 });
@@ -143,19 +247,18 @@ namespace OrderingSystem.Infrastructure.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
-                    b.Property<uint>("Version")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("xid")
-                        .HasColumnName("xmin");
-
                     b.HasKey("OrderId");
 
                     b.HasIndex("DeviceSessionId");
 
                     b.HasIndex("TableSessionId");
 
-                    b.ToTable("Orders");
+                    b.HasIndex("OrderStatus", "CreatedAt");
+
+                    b.ToTable("Orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_Order_TotalAmount_NonNegative", "\"TotalAmount\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.OrderItem", b =>
@@ -189,7 +292,12 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasIndex("OrderId");
 
-                    b.ToTable("OrderItems");
+                    b.ToTable("OrderItems", t =>
+                        {
+                            t.HasCheckConstraint("CK_OrderItem_Quantity_Positive", "\"Quantity\" > 0");
+
+                            t.HasCheckConstraint("CK_OrderItem_UnitPrice_NonNegative", "\"UnitPrice\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Table", b =>
@@ -225,6 +333,10 @@ namespace OrderingSystem.Infrastructure.Migrations
 
                     b.HasKey("TableId");
 
+                    b.HasIndex("TableNumber", "FloorNumber")
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
+
                     b.ToTable("Tables");
                 });
 
@@ -246,17 +358,55 @@ namespace OrderingSystem.Infrastructure.Migrations
                     b.Property<int>("TableId")
                         .HasColumnType("integer");
 
-                    b.Property<uint>("Version")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("xid")
-                        .HasColumnName("xmin");
-
                     b.HasKey("TableSessionId");
 
-                    b.HasIndex("TableId");
+                    b.HasIndex(new[] { "TableId", "ClosedAt" }, "IX_TableSessions_TableId")
+                        .IsUnique()
+                        .HasFilter("\"ClosedAt\" IS NULL");
 
                     b.ToTable("TableSessions");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Tax", b =>
+                {
+                    b.Property<int>("TaxId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TaxId"));
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NameAr")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("NameEn")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("TaxScope")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TaxType")
+                        .HasColumnType("integer");
+
+                    b.HasKey("TaxId");
+
+                    b.ToTable("Taxes", t =>
+                        {
+                            t.HasCheckConstraint("CK_Tax_Amount_NonNegative", "\"Amount\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.User", b =>
@@ -292,6 +442,39 @@ namespace OrderingSystem.Infrastructure.Migrations
                     b.HasKey("UserId");
 
                     b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Bill", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.TableSession", "TableSession")
+                        .WithOne("FinalBill")
+                        .HasForeignKey("OrderingSystem.Domain.Entities.Bill", "TableSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("TableSession");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.BillItem", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Bill", "Bill")
+                        .WithMany("BillItems")
+                        .HasForeignKey("BillId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Bill");
+                });
+
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.BillTax", b =>
+                {
+                    b.HasOne("OrderingSystem.Domain.Entities.Bill", "Bill")
+                        .WithMany("BillTaxes")
+                        .HasForeignKey("BillId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Bill");
                 });
 
             modelBuilder.Entity("OrderingSystem.Domain.Entities.DeviceSession", b =>
@@ -365,6 +548,13 @@ namespace OrderingSystem.Infrastructure.Migrations
                     b.Navigation("Table");
                 });
 
+            modelBuilder.Entity("OrderingSystem.Domain.Entities.Bill", b =>
+                {
+                    b.Navigation("BillItems");
+
+                    b.Navigation("BillTaxes");
+                });
+
             modelBuilder.Entity("OrderingSystem.Domain.Entities.Category", b =>
                 {
                     b.Navigation("MenuItems");
@@ -393,6 +583,9 @@ namespace OrderingSystem.Infrastructure.Migrations
             modelBuilder.Entity("OrderingSystem.Domain.Entities.TableSession", b =>
                 {
                     b.Navigation("Devices");
+
+                    b.Navigation("FinalBill")
+                        .IsRequired();
 
                     b.Navigation("Orders");
                 });

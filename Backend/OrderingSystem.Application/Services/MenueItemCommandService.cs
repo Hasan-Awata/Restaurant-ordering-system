@@ -1,6 +1,7 @@
 ﻿using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Category;
 using OrderingSystem.Application.Interfaces.MenueItem;
+using OrderingSystem.Application.Interfaces.Notifications;
 using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Enums;
@@ -14,6 +15,7 @@ namespace OrderingSystem.Application.Services
     public class MenueItemCommandService : IMenueItemCommandService
 
     {
+        private IRealTimeNotifier _realTimeNotifier;
 
         private Result<MenuRecords.MenuItemResponse> ValidateAddMenuItemRequest(int categoryId,string nameEn,string nameAr,string imageUrl,decimal price,string description)
         {
@@ -21,10 +23,6 @@ namespace OrderingSystem.Application.Services
             if (categoryId <= 0)
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("Invalid CategoryId.");
-            }
-            if (string.IsNullOrEmpty(imageUrl))
-            {
-                return Result<MenuRecords.MenuItemResponse>.Failure("ImageUrl cannot be null or empty.");
             }
             if (string.IsNullOrEmpty(nameAr) || string.IsNullOrEmpty(nameEn))
             {
@@ -44,10 +42,11 @@ namespace OrderingSystem.Application.Services
         }
         private readonly IMenueItemRepository _menuItemRepository;
         private readonly ICategoryRepository _categoryRepository;
-        public MenueItemCommandService(IMenueItemRepository menuItemRepository, ICategoryRepository categoryRepository)
+        public MenueItemCommandService(IMenueItemRepository menuItemRepository, ICategoryRepository categoryRepository, IRealTimeNotifier realTimeNotifier)
         {
             _menuItemRepository = menuItemRepository;
             _categoryRepository = categoryRepository;
+            _realTimeNotifier = realTimeNotifier;
         }
         public async Task<Result<MenuRecords.MenuItemResponse>> AddMenuItemAsync(MenuRecords.AddMenuItemRequest request)
         {
@@ -58,7 +57,7 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("Request cannot be null.");
             }
-            var validationResult = ValidateAddMenuItemRequest( request.CategoryId, request.NameEn, request.NameAr, request.ImageUrl, request.Price, request.Description);
+            var validationResult = ValidateAddMenuItemRequest( request.CategoryId, request.NameEn, request.NameAr, request.Emoji, request.Price, request.Description);
 
         
             if (!validationResult.IsSuccess)
@@ -82,6 +81,8 @@ namespace OrderingSystem.Application.Services
                 return Result<MenuRecords.MenuItemResponse>.Failure("Failed to map request to entity.");
             }
            await _menuItemRepository.AddMenuItemAsync(menuItem);
+           await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             var response = menuItem.ToResponse();
             return Result<MenuRecords.MenuItemResponse>.Success(response);
 
@@ -93,7 +94,7 @@ namespace OrderingSystem.Application.Services
                 return Result<MenuRecords.MenuItemResponse>.Failure("Request cannot be null.");
             }
            
-            if(ValidateAddMenuItemRequest(request.CategoryId, request.NameEn, request.NameAr, request.ImageUrl, request.Price, request.Description).IsSuccess == false)
+            if(ValidateAddMenuItemRequest(request.CategoryId, request.NameEn, request.NameAr, request.Emoji, request.Price, request.Description).IsSuccess == false)
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("Invalid request data.");
             }
@@ -113,9 +114,11 @@ namespace OrderingSystem.Application.Services
             existingMenuItem.NameEn = request.NameEn;
             existingMenuItem.Description = request.Description;
             existingMenuItem.Price = request.Price;
-            existingMenuItem.ImageUrl = request.ImageUrl;
+            existingMenuItem.Emoji = request.Emoji;
             existingMenuItem.IsAvailable = request.IsAvailable;
            await _menuItemRepository.UpdateMenuItemAsync(existingMenuItem);
+           await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             var response = existingMenuItem.ToResponse();
             return Result<MenuRecords.MenuItemResponse>.Success(response);
 
@@ -131,9 +134,19 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<bool>.Failure($"Menu item with ID {request.MenuItemId} not found.");
             }
+            bool hasActiveOrders = await _menuItemRepository.HasActiveOrdersAsync(request.MenuItemId);
+            if (hasActiveOrders)
+            {
+                return Result<bool>.Failure(
+                    "Cannot delete this menu item because it is currently part of an active order.",
+                    enErrorType.Conflict);
+            }
             await _menuItemRepository.DeleteMenuItemAsync(existingMenuItem);
+            await _realTimeNotifier.NotifyMenuUpdatedAsync();
+
             return Result<bool>.Success(true);
         }
+
         
     }
 }

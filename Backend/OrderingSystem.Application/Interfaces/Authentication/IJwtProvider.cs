@@ -11,5 +11,7 @@ namespace OrderingSystem.Application.Interfaces.Authentication
         (string Token, DateTime ExpiryTime) GenerateToken(User user);
         string GenerateRefreshToken();
         ClaimsPrincipal? GetPrincipalFromExpiredToken(string token);
+        string GenerateCustomerSignalRToken(Guid deviceSessionId, Guid tableSessionId);
+        ClaimsPrincipal? ValidateCustomerSignalRToken(string token);
     }
 }

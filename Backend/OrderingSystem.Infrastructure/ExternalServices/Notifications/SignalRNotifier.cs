@@ -34,11 +34,11 @@ namespace OrderingSystem.Infrastructure.Notifications
                 .ReceiveHostApprovalNotification("Your request to join the table has been approved.");
         }
 
-        public async Task NotifyHostOfTableActivationAsync(Guid tableSessionId)
+        public async Task NotifyHostOfTableActivationAsync(Guid hostDeviceSessionId, Guid tableSessionId)
         {
             // The Host connects to a group named after their DeviceSessionId while waiting
-            await _hubContext.Clients.Group(tableSessionId.ToString())
-                .ReceiveCashierApprovalNotification(tableSessionId, "Your table has been approved by the cashier and is now active.");
+            await _hubContext.Clients.Group(hostDeviceSessionId.ToString())
+                    .ReceiveCashierApprovalNotification(tableSessionId, "Your table has been approved by the cashier and is now active.");
         }
 
         public async Task NotifyCashierOfNewOrderAsync(int orderId, Guid tableSessionId)
@@ -68,11 +68,70 @@ namespace OrderingSystem.Infrastructure.Notifications
                 .ReceiveBillRequestNotification(tableSessionId, tableNumber, $"Table {tableNumber} is requesting the bill.");
         }
 
-        public async Task NotifyCustomerOfBillApprovalAsync(Guid tableSessionId)
+        public async Task NotifyMenuUpdatedAsync()
         {
-            // Broadcast to the entire table session group so all devices at the table know the bill is ready
+            // Broadcasting to All ensures every active customer app refreshes the menu
+            await _hubContext.Clients.All.ReceiveMenuUpdated("The menu has been updated.");
+        }
+        public async Task NotifyCustomerOfActivationDismissedAsync(Guid tableSessionId)
+        {
             await _hubContext.Clients.Group(tableSessionId.ToString())
-                .ReceiveBillApprovalNotification("Your bill has been prepared and approved by the cashier.");
+                .ReceiveActivationDismissed("Table activation was dismissed.");
+        }
+
+        public async Task NotifyCustomerOfBillRejectedAsync(Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveBillRejected("Your bill request was rejected.");
+        }
+
+        public async Task NotifyCustomerOfOrderRejectedAsync(Guid deviceSessionId, int orderId)
+        {
+            await _hubContext.Clients.Group(deviceSessionId.ToString())
+                .ReceiveOrderRejected(orderId, "Your order request was rejected.");
+        }
+
+        public async Task NotifyCustomerOfSessionEndedAsync(Guid tableSessionId)
+        {
+            // Target the specific table session group so all devices at the table get it
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveSessionEnded("The table session has been closed. Thank you!");
+        }
+        
+        public async Task NotifyGuestsOfBillRequestAsync(Guid tableSessionId)
+        {
+            // Target the group containing ALL devices (Host + Guests) at this specific table
+            await _hubContext.Clients.Group(tableSessionId.ToString())
+                .ReceiveBillRequested(tableSessionId.ToString());
+        }
+        public async Task NotifyTaxesUpdatedAsync()
+        {
+            await _hubContext.Clients.All.ReceiveTaxesUpdated("The taxes configuration has been updated.");
+        }
+        public async Task NotifyGuestOfRejectionAsync(Guid guestDeviceSessionId)
+        {
+            await _hubContext.Clients.Group(guestDeviceSessionId.ToString())
+                .ReceiveHostRejectionNotification("Your request to join the table has been rejected.");
+        }
+        public async Task NotifyCashiersOfZombieSessionClearedAsync(Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveZombieSessionCleared(tableSessionId, "A pending session expired and was automatically cleared.");
+        }
+        public async Task NotifyCashiersOfOrderSyncAsync(int orderId, enOrderStatus status)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveCashierOrderSync(orderId, status, $"Order #{orderId} status changed to {status}.");
+        }
+        public async Task NotifyCashiersOfTableSessionSyncAsync(Guid tableSessionId, enSessionStatus status)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveCashierTableSessionSync(tableSessionId, status, $"Table session status changed to {status}.");
+        }
+        public async Task NotifyCashiersOfBillSyncAsync(Guid tableSessionId)
+        {
+            await _hubContext.Clients.Group(TableSessionNotificationsHub.GroupNames.Cashiers)
+                .ReceiveCashierBillSync(tableSessionId, "The bill request was processed by another cashier.");
         }
     }
 }

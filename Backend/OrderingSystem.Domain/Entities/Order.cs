@@ -15,8 +15,8 @@ namespace OrderingSystem.Domain.Entities
         public DateTime CreatedAt { get; set; }
 
         // Navigation
-        public TableSession Session { get; set; }
-        public DeviceSession Device { get; set; }
+        public TableSession Session { get; set; } = null!;
+        public DeviceSession Device { get; set; } = null!;
         public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
     }
 }

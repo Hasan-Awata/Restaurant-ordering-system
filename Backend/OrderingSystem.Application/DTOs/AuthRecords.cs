@@ -10,4 +10,6 @@ namespace OrderingSystem.Application.DTOs
         public record CreateUserRequest(string FullName, string Password, enRoleType Role);
         public record UserResponse(int UserId, string FullName, enRoleType Role);
         public record RefreshTokenRequest(string AccessToken, string RefreshToken);
+        public record UpdateUserRequest(string? FullName, enRoleType? Role, string? Password);
+        public record UpdateProfileRequest(string? FullName, string? CurrentPassword, string? NewPassword);
 }

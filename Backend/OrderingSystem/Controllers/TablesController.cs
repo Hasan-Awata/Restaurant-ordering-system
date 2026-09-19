@@ -1,6 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using OrderingSystem.Application.DTOs;
-using OrderingSystem.Application.DTOs.Paged; // تمت إضافة هذا السطر من أجل PageDTO
+using OrderingSystem.Application.DTOs.Paged; 
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Enums;
 using System.Threading.Tasks;
@@ -9,6 +10,7 @@ namespace OrderingSystem.WebApi.Controllers
 {
     [ApiController]
     [Route("api/tables")]
+    [Authorize(Policy = "RequireStaff")]
     public class TablesController : ControllerBase
     {
         private readonly ITableCommandService _tableCommandService;
@@ -19,10 +21,6 @@ namespace OrderingSystem.WebApi.Controllers
             _tableCommandService = tableCommandService;
             _tableQueryService = tableQueryService;
         }
-
-        // ==========================================
-        // الكود القديم الخاص بك (لم يتم تغييره)
-        // ==========================================
 
         [HttpPost]
         public async Task<IActionResult> AddTable([FromBody] AddTableRequest request)
@@ -48,7 +46,7 @@ namespace OrderingSystem.WebApi.Controllers
             }
             return Ok(result.Value);
         }
-        
+
         [HttpDelete("{tableId}")]
         public async Task<IActionResult> DeleteTable(int tableId)
         {
@@ -71,7 +69,7 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(new { QrCode = qrCode });
         }
 
-        
+
 
         [HttpGet("{tableId}")]
         public async Task<IActionResult> GetTableById(int tableId)
@@ -116,6 +114,13 @@ namespace OrderingSystem.WebApi.Controllers
         public async Task<IActionResult> GetAllPendingActivationTables([FromQuery] PageDTO page)
         {
             var result = await _tableQueryService.GetAllPendingActivationTablesAsync(page);
+            return Ok(result);
+        }
+
+        [HttpGet("billing")]
+        public async Task<IActionResult> GetAllBillingTables([FromQuery] PageDTO page)
+        {
+            var result = await _tableQueryService.GetAllBillingTablesAsync(page);
             return Ok(result);
         }
     }

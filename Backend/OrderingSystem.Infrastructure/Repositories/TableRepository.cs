@@ -21,9 +21,16 @@ namespace OrderingSystem.Infrastructure.Repositories
             await _context.SaveChangesAsync();
         }
 
-        public async Task UpdateTableAsync(Table table)
+        public async Task UpdateTableAsync(Table table, uint? originalVersion = null)
         {
             _context.Tables.Update(table);
+
+            // Only override the tracker if the frontend sent a specific version to check against
+            if (originalVersion.HasValue)
+            {
+                _context.Entry(table).Property(e => e.Version).OriginalValue = originalVersion.Value;
+            }
+
             await _context.SaveChangesAsync();
         }
 

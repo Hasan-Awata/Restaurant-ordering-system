@@ -20,7 +20,7 @@ namespace OrderingSystem.Application.Mappers
         public static DeviceSessionResponse ToResponse(this DeviceSession entity)
         {
             return new DeviceSessionResponse(
-                entity.DeviceSessionId,  
+                entity.DeviceSessionId,
                 entity.Role,
                 entity.IsApproved
             );

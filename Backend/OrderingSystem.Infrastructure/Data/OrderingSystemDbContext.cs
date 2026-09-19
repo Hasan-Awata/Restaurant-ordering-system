@@ -19,6 +19,10 @@ namespace OrderingSystem.Infrastructure.Data
         public DbSet<DeviceSession> SessionDevices { get; set; }
         public DbSet<Order> Orders { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }
+        public DbSet<Tax> Taxes { get; set; }
+        public DbSet<Bill> Bills { get; set; }
+        public DbSet<BillItem> BillItems { get; set; }
+        public DbSet<BillTax> BillTaxes { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -50,9 +54,9 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.QrCode).IsRequired().HasMaxLength(255);
                 entity.Property(e => e.IsDeleted).IsRequired();
 
-                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
-                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
-                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
+                entity.Property(e => e.Version)
+                      .IsRowVersion()
+                      .HasColumnName("xmin");
 
                 entity.HasMany(t => t.Sessions)
                       .WithOne(ts => ts.Table)
@@ -60,6 +64,10 @@ namespace OrderingSystem.Infrastructure.Data
                       .OnDelete(DeleteBehavior.Restrict);
 
                 entity.HasQueryFilter(e => !e.IsDeleted);
+
+                entity.HasIndex(t => new { t.TableNumber, t.FloorNumber })
+                      .IsUnique()
+                      .HasFilter("\"IsDeleted\" = false");
             });
 
             // 3. TableSessions
@@ -67,14 +75,14 @@ namespace OrderingSystem.Infrastructure.Data
             {
                 entity.HasKey(e => e.TableSessionId);
 
-                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
-                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
-                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
-
                 entity.HasOne(e => e.Table)
                       .WithMany(t => t.Sessions)
                       .HasForeignKey(e => e.TableId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasIndex(s => new { s.TableId, s.ClosedAt }, "IX_TableSessions_TableId")
+                      .HasFilter(@"""ClosedAt"" IS NULL")
+                      .IsUnique();
             });
 
             // 4. Categories
@@ -95,14 +103,19 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.Price).HasPrecision(18, 2);
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
+
+                entity.Property(e => e.Emoji).HasMaxLength(50).IsRequired(false);
+
                 entity.Property(e => e.IsDeleted).IsRequired();
-             
+
                 entity.HasOne(e => e.Category)
                       .WithMany(c => c.MenuItems)
                       .HasForeignKey(e => e.CategoryId)
                       .OnDelete(DeleteBehavior.Restrict);
-                
+
                 entity.HasQueryFilter(e => !e.IsDeleted);
+
+                entity.HasIndex(m => new { m.CategoryId, m.IsAvailable, m.IsDeleted });
             });
 
             // 6. DeviceSession
@@ -122,10 +135,6 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.HasKey(e => e.OrderId);
                 entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
 
-                entity.Property<uint>("Version")     // 1. Creates a shadow property in EF memory
-                      .IsRowVersion()                // 2. Tells EF Core to use this for concurrency checks
-                      .HasColumnName("xmin");        // 3. Maps it to the physical PostgreSQL system column
-
                 entity.HasOne(e => e.Session)
                       .WithMany(s => s.Orders)
                       .HasForeignKey(e => e.TableSessionId)
@@ -138,6 +147,9 @@ namespace OrderingSystem.Infrastructure.Data
 
                 entity.HasQueryFilter(e => e.OrderStatus != enOrderStatus.Cancelled);
 
+                entity.HasIndex(o => new { o.OrderStatus, o.CreatedAt });
+
+                entity.ToTable(t => t.HasCheckConstraint("CK_Order_TotalAmount_NonNegative", "\"TotalAmount\" >= 0"));
             });
 
             // 8. OrderItems
@@ -156,6 +168,47 @@ namespace OrderingSystem.Infrastructure.Data
                       .WithMany(m => m.OrderItems)
                       .HasForeignKey(e => e.MenuItemId)
                       .OnDelete(DeleteBehavior.Restrict);
+
+                entity.ToTable(t =>
+                {
+                    t.HasCheckConstraint("CK_OrderItem_Quantity_Positive", "\"Quantity\" > 0");
+                    t.HasCheckConstraint("CK_OrderItem_UnitPrice_NonNegative", "\"UnitPrice\" >= 0");
+                });
+            });
+
+            modelBuilder.Entity<Tax>(entity =>
+            {
+                entity.HasKey(e => e.TaxId);
+                entity.Property(e => e.NameAr).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.NameEn).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.Amount).HasPrecision(18, 2).IsRequired();
+                entity.Property(e => e.IsDeleted).IsRequired();
+                entity.HasQueryFilter(e => !e.IsDeleted);
+                entity.ToTable(t => t.HasCheckConstraint("CK_Tax_Amount_NonNegative", "\"Amount\" >= 0"));
+            });
+
+            modelBuilder.Entity<Bill>(entity => {
+                entity.HasKey(e => e.BillId);
+                entity.Property(e => e.TotalSubTotal).HasPrecision(18, 2);
+                entity.Property(e => e.TotalTax).HasPrecision(18, 2);
+                entity.Property(e => e.GrandTotal).HasPrecision(18, 2);
+                entity.HasOne(e => e.TableSession).WithOne(ts => ts.FinalBill)
+                      .HasForeignKey<Bill>(e => e.TableSessionId).OnDelete(DeleteBehavior.Restrict);
+            });
+
+            modelBuilder.Entity<BillItem>(entity => {
+                entity.HasKey(e => e.BillItemId);
+                entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
+                entity.Property(e => e.TotalPrice).HasPrecision(18, 2);
+                entity.HasOne(e => e.Bill).WithMany(b => b.BillItems)
+                      .HasForeignKey(e => e.BillId).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<BillTax>(entity => {
+                entity.HasKey(e => e.BillTaxId);
+                entity.Property(e => e.AppliedAmount).HasPrecision(18, 2);
+                entity.HasOne(e => e.Bill).WithMany(b => b.BillTaxes)
+                      .HasForeignKey(e => e.BillId).OnDelete(DeleteBehavior.Cascade);
             });
         }
     }

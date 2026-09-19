@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.WebApi.Controllers.Base;
@@ -19,25 +20,36 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpPost("login")]
+        [EnableRateLimiting("LoginPolicy")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
             var result = await _authCommandService.LoginAsync(request);
             return HandleResult(result);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "AdminOnly")] 
         [HttpPost("register")]
         public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
         {
             var result = await _authCommandService.CreateUserAsync(request);
-
+             
             return HandleResult(result);
         }
-
+        
         [HttpPost("refresh-token")]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
         {
             var result = await _authCommandService.RefreshTokenAsync(request);
+            return HandleResult(result);
+        }
+
+        [Authorize]
+        [HttpPut("profile")]
+        public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest request)
+        {
+            if (!CurrentUserId.HasValue) return Unauthorized(new { error = "Invalid token claims." });
+
+            var result = await _authCommandService.UpdateProfileAsync(CurrentUserId.Value, request);
             return HandleResult(result);
         }
 

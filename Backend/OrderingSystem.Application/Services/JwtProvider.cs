@@ -83,5 +83,57 @@ namespace OrderingSystem.Infrastructure.Authentication
 
             return principal;
         }
+
+        // Inside JwtProvider.cs
+        public string GenerateCustomerSignalRToken(Guid deviceSessionId, Guid tableSessionId)
+        {
+            var jwtSettings = _config.GetSection("JwtSettings");
+            var secretKey = jwtSettings["SecretKey"]!;
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            // Embed both IDs directly into the claims
+            var claims = new[]
+            {
+        new Claim("DeviceSessionId", deviceSessionId.ToString()),
+        new Claim("TableSessionId", tableSessionId.ToString())
+    };
+
+            var token = new JwtSecurityToken(
+                issuer: jwtSettings["Issuer"],
+                audience: jwtSettings["Audience"],
+                claims: claims,
+                expires: DateTime.UtcNow.AddHours(4), // Match the cookie lifespan
+                signingCredentials: creds
+            );
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+
+        public ClaimsPrincipal? ValidateCustomerSignalRToken(string token)
+        {
+            var jwtSettings = _config.GetSection("JwtSettings");
+            var secretKey = jwtSettings["SecretKey"]!;
+
+            var validationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidIssuer = jwtSettings["Issuer"],
+                ValidAudience = jwtSettings["Audience"],
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
+                ValidateLifetime = true
+            };
+
+            try
+            {
+                return new JwtSecurityTokenHandler().ValidateToken(token, validationParameters, out _);
+            }
+            catch
+            {
+                return null; // Gracefully fail if token is tampered with or expired
+            }
+        }
     }
 }

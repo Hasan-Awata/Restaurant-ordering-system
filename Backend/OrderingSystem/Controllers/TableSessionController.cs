@@ -1,7 +1,9 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using OrderingSystem.Application.DTOs;
-using Microsoft.AspNetCore.Authorization;
+using OrderingSystem.Application.Interfaces.Authentication;
+using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
 using OrderingSystem.WebApi.Controllers.Base;
 
 namespace OrderingSystem.WebApi.Controllers
@@ -27,10 +29,8 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpPost("qr")]
         public async Task<IActionResult> ProcessQrCode([FromBody] ProcessQrCodeRequest request)
         {
-            // Use the secure cookie value extracted by the BaseController
             var result = await _sessionCommandService.ProcessTableQrCodeAsync(request.qrCode, CurrentDeviceSessionId);
 
-            // If successful, set/refresh the secure cookie
             if (result.IsSuccess && result.Value?.DeviceSession != null)
             {
                 var cookieOptions = new CookieOptions
@@ -38,21 +38,35 @@ namespace OrderingSystem.WebApi.Controllers
                     HttpOnly = true,
                     Secure = true,
                     SameSite = SameSiteMode.None,
-                    Expires = DateTime.UtcNow.AddHours(4)
+                    Expires = DateTime.UtcNow.AddHours(4),
+                    MaxAge = TimeSpan.FromHours(4),
+                    IsEssential = true
                 };
 
-                Response.Cookies.Append(
-                    "DeviceSessionId",
-                    result.Value.DeviceSession.DeviceSessionId.ToString(),
-                    cookieOptions
+                // LGACY COOKIE LOGIC (Less Secure, but working if there was any problems with the JWTs)
+                // Response.Cookies.Append("DeviceSessionId", result.Value.DeviceSession.DeviceSessionId.ToString(), cookieOptions);
+
+                var jwtProvider = HttpContext.RequestServices.GetRequiredService<IJwtProvider>();
+                var signalRToken = jwtProvider.GenerateCustomerSignalRToken(
+                    result.Value.DeviceSession.DeviceSessionId,
+                    result.Value.TableSession.TableSessionId
                 );
+
+                Response.Cookies.Append("SignalRContext", signalRToken, cookieOptions);
+
+                return Ok(new
+                {
+                    tableSession = result.Value.TableSession,
+                    deviceSession = result.Value.DeviceSession,
+                    accessToken = signalRToken
+                });
             }
 
             return HandleResult(result);
         }
 
         // ── CASHIER PATH: Approve the activation request ────────────────────────
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpPost("activate")]
         public async Task<IActionResult> ActivateTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -84,17 +98,19 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
-        // ── CASHIER PATH: Approve the bill ──────────────────────────────────────
-        [Authorize(Roles = "Admin,Cashier")]
-        [HttpPost("approve-bill")]
-        public async Task<IActionResult> ApproveBill([FromBody] ApproveBillRequest request)
+        // ── CUSTOMER PATH: Reject the guest ─────────────────────────────────────
+        [HttpPost("reject")]
+        public async Task<IActionResult> RejectGuest([FromBody] ApproveJoiningSessionRequest request)
         {
-            var result = await _sessionCommandService.ApproveBillAsync(request.tableSessionId);
+            if (!CurrentDeviceSessionId.HasValue)
+                return Unauthorized(new { error = "Invalid or missing device session." });
+
+            var result = await _sessionCommandService.RejectJoiningRequestAsync(request.deviceSessionId, CurrentDeviceSessionId.Value);
             return HandleResult(result);
         }
 
         // ── CASHIER PATH: Close session after payment ───────────────────────────
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpPost("end")]
         public async Task<IActionResult> EndTableSession([FromBody] ActivateTableSessionRequest request)
         {
@@ -114,8 +130,24 @@ namespace OrderingSystem.WebApi.Controllers
             return Ok(result);
         }
 
+        [Authorize(Policy = "RequireStaff")]
+        [HttpPost("dismiss")]
+        public async Task<IActionResult> DismissTableSession([FromBody] ActivateTableSessionRequest request)
+        {
+            var result = await _sessionCommandService.DismissTableSessionAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
+        [Authorize(Policy = "RequireStaff")]
+        [HttpPost("dismiss-bill")]
+        public async Task<IActionResult> DismissBill([FromBody] ActivateTableSessionRequest request)
+        {
+            var result = await _sessionCommandService.DismissBillAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
         // 2. READ ENDPOINT (Query Path)
-        [Authorize(Roles = "Admin,Cashier")]
+        [Authorize(Policy = "RequireStaff")]
         [HttpGet("active/{tableId}")]
         public async Task<IActionResult> GetActiveSession(int tableId)
         {
@@ -124,6 +156,24 @@ namespace OrderingSystem.WebApi.Controllers
             if (response == null) return NotFound(new { error = $"No active session found for table ID {tableId}." });
 
             return Ok(response);
+        }
+
+        [HttpGet("{tableSessionId}/status")]
+        public async Task<IActionResult> GetSessionPollingStatus(Guid tableSessionId)
+        {
+            if (!CurrentDeviceSessionId.HasValue)
+            {
+                return Unauthorized(new { error = "Invalid or missing device session." });
+            }
+
+            var result = await _sessionQueryService.GetSessionPollingStatusAsync(tableSessionId, CurrentDeviceSessionId.Value);
+
+            if (result == null)
+            {
+                return NotFound(new { error = "Session or device not found." });
+            }
+
+            return Ok(result);
         }
     }
 }
