@@ -40,6 +40,7 @@
 │   │   │   └── FolderProfile.pubxml.user
 │   │   └── launchSettings.json
 │   ├── appsettings.Development.json
+│   ├── appsettings.Production.json
 │   ├── appsettings.json
 │   └── dotnet-tools.json
 ├── OrderingSystem.Application
@@ -425,7 +426,6 @@ builder.Services.AddAuthentication(options =>
         ValidIssuer = jwtSettings["Issuer"],
         ValidAudience = jwtSettings["Audience"],
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
-        RoleClaimType = "role"
     };
 
     options.Events = new JwtBearerEvents
