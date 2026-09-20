@@ -42,6 +42,7 @@ builder.Services.AddHttpLogging(logging =>
 {
     logging.LoggingFields = HttpLoggingFields.All;
     logging.MediaTypeOptions.AddText("application/json");
+    // This is the critical line:
     logging.CombineLogs = true;
 });
 
@@ -58,13 +59,16 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 builder.Services.AddRateLimiter(options =>
 {
+    // Return a standard 429 status code when limits are hit
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
     options.AddPolicy("DynamicRestaurantPolicy", httpContext =>
     {
+        // 1. Primary Secure Approach: Extract from the validated JWT Claims
         var sessionId = httpContext.User.FindFirst("DeviceSessionId")?.Value;
         var hasDeviceSession = !string.IsNullOrWhiteSpace(sessionId);
 
+        // 2. Web Fallback: Try to read from Cookies (Standard Browsers)
         if (!hasDeviceSession && httpContext.Request.Cookies.TryGetValue("DeviceSessionId", out var cookieValue))
         {
             sessionId = cookieValue;
@@ -73,6 +77,7 @@ builder.Services.AddRateLimiter(options =>
 
         if (hasDeviceSession && !string.IsNullOrWhiteSpace(sessionId))
         {
+            // Authenticated Device: Standard limit per individual device
             return RateLimitPartition.GetFixedWindowLimiter(sessionId, _ =>
                 new FixedWindowRateLimiterOptions
                 {
@@ -83,15 +88,14 @@ builder.Services.AddRateLimiter(options =>
                 });
         }
 
-        // 3. Anonymous Request: IP-based partition for shared Restaurant Wi-Fi
+        // 3. Anonymous Request: IP-based partition
         var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? httpContext.TraceIdentifier;
 
-        return RateLimitPartition.GetTokenBucketLimiter(ip, _ =>
-            new TokenBucketRateLimiterOptions
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ =>
+            new FixedWindowRateLimiterOptions
             {
-                TokenLimit = 1000, // Maximum initial burst capacity for the shared IP
-                ReplenishmentPeriod = TimeSpan.FromSeconds(10),
-                TokensPerPeriod = 150, // Replenishes 150 requests every 10 seconds (900/min sustained)
+                PermitLimit = 1000,
+                Window = TimeSpan.FromMinutes(1),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                 QueueLimit = 50
             });
@@ -104,10 +108,10 @@ builder.Services.AddRateLimiter(options =>
         return RateLimitPartition.GetFixedWindowLimiter(ip, _ =>
             new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 5,
-                Window = TimeSpan.FromMinutes(1),
+                PermitLimit = 5, // 5 tries only
+                Window = TimeSpan.FromMinutes(1), // every minute
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 0
+                QueueLimit = 0 // reject the request immediately if the limit is exceeded
             });
     });
 });
@@ -133,8 +137,7 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 // ── Database Context ──────────────────────────────────────────────────────
-// Switched to AddDbContextPool for connection multiplexing
-builder.Services.AddDbContextPool<OrderingSystemDbContext>(options =>
+builder.Services.AddDbContext<OrderingSystemDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
         b =>
         {
@@ -151,6 +154,7 @@ builder.Services.AddHealthChecks()
     .AddDbContextCheck<OrderingSystemDbContext>();
 
 // ── Dependency Injections ──────────────────────────────────────────────────
+// Register the Global Exception Handler and standard Problem Details
 builder.Services.AddSingleton<IDatabaseErrorMapper, PostgresErrorMapper>();
 builder.Services.AddExceptionHandler<OrderingSystem.WebApi.Middleware.GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
@@ -214,11 +218,13 @@ builder.Services.AddAuthentication(options =>
     {
         OnMessageReceived = context =>
         {
+            // 1. If an explicit Authorization header exists (Staff / Mobile App), NEVER touch it
             if (!string.IsNullOrEmpty(context.Request.Headers.Authorization))
             {
                 return Task.CompletedTask;
             }
 
+            // 2. Hub-specific Query String fallback (SignalR handshake)
             var accessToken = context.Request.Query["access_token"];
             if (!string.IsNullOrEmpty(accessToken))
             {
@@ -226,6 +232,7 @@ builder.Services.AddAuthentication(options =>
                 return Task.CompletedTask;
             }
 
+            // 3. Customer Cookie fallback (Only evaluated if no header was sent)
             if (context.Request.Cookies.TryGetValue("SignalRContext", out var cookieToken))
             {
                 context.Token = cookieToken;
@@ -245,12 +252,14 @@ builder.Services.AddAuthentication(options =>
                 _ => string.Empty
             };
 
+            // Check if individual token was logged out
             if (!string.IsNullOrEmpty(tokenString) && cache.TryGetValue($"blacklist_{tokenString}", out _))
             {
                 context.Fail("This token has been revoked.");
                 return Task.CompletedTask;
             }
 
+            // Check if customer's table session has been closed
             var tableSessionIdClaim = context.Principal?.FindFirst("TableSessionId")?.Value;
             if (!string.IsNullOrEmpty(tableSessionIdClaim) &&
                 cache.TryGetValue($"revoked_table_session_{tableSessionIdClaim}", out _))
@@ -268,6 +277,8 @@ builder.Services.AddAuthentication(options =>
             {
                 var logger = context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
                 logger.LogWarning("JWT Token expired for user connection.");
+
+                // Appends a header so the frontend interceptors can catch it on HTTP requests or negotiation
                 context.Response.Headers.Append("Token-Expired", "true");
             }
             return Task.CompletedTask;
@@ -277,9 +288,11 @@ builder.Services.AddAuthentication(options =>
 
 builder.Services.AddAuthorization(options =>
 {
+    // Strict access for Managers/Owners
     options.AddPolicy("AdminOnly", policy =>
         policy.RequireRole(enRoleType.Admin.ToString()));
 
+    // Operational access for Front-of-House
     options.AddPolicy("RequireStaff", policy =>
         policy.RequireRole(
             enRoleType.Admin.ToString(),
@@ -289,15 +302,21 @@ builder.Services.AddAuthorization(options =>
 // ── Adding CORS policy ────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {
+    // 1. Wide-open policy for local development only
     options.AddPolicy("DevelopmentPolicy", builder =>
         builder.SetIsOriginAllowed(_ => true)
                .AllowAnyMethod()
                .AllowAnyHeader()
                .AllowCredentials());
 
+    // 2. Iron-clad policy for Production
     options.AddPolicy("ProductionPolicy", builder =>
          builder.WithOrigins(
-                "https://orderingsystem.tech"
+                "http://127.0.0.1:5500",
+                "http://localhost:3000",
+                "http://localhost:8080",
+                "https://courageous-pika-0f4f00.netlify.app",
+                "https://web-five-tau-q7jp0rhb33.vercel.app"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent", "x-device-session-id")
@@ -307,24 +326,29 @@ builder.Services.AddCors(options =>
 // ─────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
+// Inject forwarded headers immediately to resolve the correct client IP
 app.UseForwardedHeaders();
+
+app.UseHttpLogging();
 app.UseExceptionHandler();
 
 if (app.Environment.IsDevelopment())
 {
-    // Scoped HTTP Logging to Development only to prevent production I/O throttling
-    app.UseHttpLogging();
     app.UseSwagger();
     app.UseSwaggerUI();
     app.UseRouting();
+    // Use the wide-open policy locally
     app.UseCors("DevelopmentPolicy");
 }
 else
 {
-    // Nginx handles HTTPS externally, so we only need Routing and CORS internally
+    // Enforce HTTPS routing in production
+    app.UseHttpsRedirection();
     app.UseRouting();
+    // Use the locked-down policy in production
     app.UseCors("ProductionPolicy");
 }
+
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -340,6 +364,7 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var context = services.GetRequiredService<OrderingSystemDbContext>();
+
         var config = services.GetRequiredService<IConfiguration>();
 
         context.Database.Migrate();
