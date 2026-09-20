@@ -97,7 +97,8 @@ namespace OrderingSystem.Application.Services
                 {
                     table.Status = enTableStatus.Occupied;
                     await _tableRepository.UpdateTableAsync(table);
-                    activationResult = await ActivateTableSessionAsync(table.TableId, deviceSessionId ?? Guid.CreateVersion7());
+                    //activationResult = await ActivateTableSessionAsync(table.TableId, deviceSessionId ?? Guid.CreateVersion7());
+                    activationResult = await ActivateTableSessionAsync(table.TableId, Guid.CreateVersion7());
                 });
 
                 return activationResult!;
