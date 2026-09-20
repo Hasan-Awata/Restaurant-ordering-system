@@ -33,10 +33,7 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task UpdateOrderAsync(Order order)
         {
-            if (_context.Entry(order).State == EntityState.Detached)
-            {
                 _context.Orders.Update(order);
-            }
             await _context.SaveChangesAsync();
         }
 
@@ -54,13 +51,7 @@ namespace OrderingSystem.Infrastructure.Repositories
         }
         public async Task UpdateOrdersAsync(IEnumerable<Order> orders)
         {
-            foreach (var order in orders)
-            {
-                if (_context.Entry(order).State == EntityState.Detached)
-                {
-                    _context.Orders.Update(order);
-                }
-            }
+                    _context.Orders.UpdateRange(orders);
             await _context.SaveChangesAsync();
         }
 

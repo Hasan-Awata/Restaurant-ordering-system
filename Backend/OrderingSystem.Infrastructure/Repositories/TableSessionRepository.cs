@@ -50,10 +50,7 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task UpdateSessionAsync(TableSession session)
         {
-            if (_context.Entry(session).State == EntityState.Detached)
-            {
                 _context.TableSessions.Update(session);
-            }
             await _context.SaveChangesAsync();
         }
 
