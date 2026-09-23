@@ -40,7 +40,6 @@
 │   │   │   └── FolderProfile.pubxml.user
 │   │   └── launchSettings.json
 │   ├── appsettings.Development.json
-│   ├── appsettings.Production.json
 │   ├── appsettings.json
 │   └── dotnet-tools.json
 ├── OrderingSystem.Application
@@ -3748,7 +3747,8 @@ namespace OrderingSystem.Application.Services
                 {
                     table.Status = enTableStatus.Occupied;
                     await _tableRepository.UpdateTableAsync(table);
-                    activationResult = await ActivateTableSessionAsync(table.TableId, deviceSessionId ?? Guid.CreateVersion7());
+                    //activationResult = await ActivateTableSessionAsync(table.TableId, deviceSessionId ?? Guid.CreateVersion7());
+                    activationResult = await ActivateTableSessionAsync(table.TableId, Guid.CreateVersion7());
                 });
 
                 return activationResult!;
@@ -6681,10 +6681,7 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task UpdateOrderAsync(Order order)
         {
-            if (_context.Entry(order).State == EntityState.Detached)
-            {
                 _context.Orders.Update(order);
-            }
             await _context.SaveChangesAsync();
         }
 
@@ -6702,13 +6699,7 @@ namespace OrderingSystem.Infrastructure.Repositories
         }
         public async Task UpdateOrdersAsync(IEnumerable<Order> orders)
         {
-            foreach (var order in orders)
-            {
-                if (_context.Entry(order).State == EntityState.Detached)
-                {
-                    _context.Orders.Update(order);
-                }
-            }
+                    _context.Orders.UpdateRange(orders);
             await _context.SaveChangesAsync();
         }
 
@@ -6840,10 +6831,7 @@ namespace OrderingSystem.Infrastructure.Repositories
 
         public async Task UpdateSessionAsync(TableSession session)
         {
-            if (_context.Entry(session).State == EntityState.Detached)
-            {
                 _context.TableSessions.Update(session);
-            }
             await _context.SaveChangesAsync();
         }
 
