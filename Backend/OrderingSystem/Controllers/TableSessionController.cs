@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Domain.Enums;
 using OrderingSystem.WebApi.Controllers.Base;
 
 namespace OrderingSystem.WebApi.Controllers
@@ -122,6 +123,22 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpGet("{tableSessionId}/bill")]
         public async Task<IActionResult> GetBillSummary(Guid tableSessionId)
         {
+            // 1. Check if the user is a Staff member (Admin or Cashier)
+            bool isStaff = User.IsInRole(enRoleType.Admin.ToString()) ||
+                           User.IsInRole(enRoleType.Cashier.ToString());
+
+            // 2. If not staff, enforce strict device session validation
+            if (!isStaff)
+            {
+                if (!CurrentDeviceSessionId.HasValue)
+                    return Unauthorized(new { error = "Invalid or missing device session." });
+
+                var status = await _sessionQueryService.GetSessionPollingStatusAsync(tableSessionId, CurrentDeviceSessionId.Value);
+                if (status == null || !status.IsDeviceApproved)
+                    return Unauthorized(new { error = "You must be approved by the host to view table data." });
+            }
+
+            // 3. Fetch and return the bill
             var result = await _sessionQueryService.GetBillSummaryAsync(tableSessionId);
 
             if (result == null)
