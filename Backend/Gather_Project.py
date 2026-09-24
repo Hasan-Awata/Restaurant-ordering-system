@@ -142,5 +142,5 @@ if __name__ == "__main__":
     gather_project_code(
         root_dir=project_root, 
         output_file=output_filename, 
-        include_migrations=True
+        include_migrations=False
     )

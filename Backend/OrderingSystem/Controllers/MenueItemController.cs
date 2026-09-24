@@ -4,6 +4,9 @@ using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.WebApi.Controllers.Base;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.Formats.Webp;
 
 namespace OrderingSystem.WebApi.Controllers
 {
@@ -67,12 +70,25 @@ namespace OrderingSystem.WebApi.Controllers
 
             if (!Directory.Exists(uploadsFolder)) Directory.CreateDirectory(uploadsFolder);
 
-            var uniqueFileName = Guid.NewGuid().ToString() + Path.GetExtension(file.FileName);
+            // Force the extension to .webp for optimal web delivery
+            var uniqueFileName = Guid.NewGuid().ToString() + ".webp";
             var filePath = Path.Combine(uploadsFolder, uniqueFileName);
 
-            using (var stream = new FileStream(filePath, FileMode.Create))
+            using (var stream = file.OpenReadStream())
+            using (var image = await Image.LoadAsync(stream))
             {
-                await file.CopyToAsync(stream);
+                // Resize while maintaining aspect ratio, capping max dimensions to 600x600
+                image.Mutate(x => x.Resize(new ResizeOptions
+                {
+                    Size = new Size(600, 600),
+                    Mode = ResizeMode.Max
+                }));
+
+                // Compress and save as WebP
+                await image.SaveAsWebpAsync(filePath, new WebpEncoder
+                {
+                    Quality = 75 // Balances visual fidelity with minimal file size
+                });
             }
 
             // Returns a relative path that the frontend can use in the AddMenuItemRequest
