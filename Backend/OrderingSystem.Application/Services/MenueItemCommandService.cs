@@ -57,7 +57,7 @@ namespace OrderingSystem.Application.Services
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("Request cannot be null.");
             }
-            var validationResult = ValidateAddMenuItemRequest( request.CategoryId, request.NameEn, request.NameAr, request.Emoji, request.Price, request.Description);
+            var validationResult = ValidateAddMenuItemRequest( request.CategoryId, request.NameEn, request.NameAr, request.ImageUrl, request.Price, request.Description);
 
         
             if (!validationResult.IsSuccess)
@@ -94,7 +94,7 @@ namespace OrderingSystem.Application.Services
                 return Result<MenuRecords.MenuItemResponse>.Failure("Request cannot be null.");
             }
            
-            if(ValidateAddMenuItemRequest(request.CategoryId, request.NameEn, request.NameAr, request.Emoji, request.Price, request.Description).IsSuccess == false)
+            if(ValidateAddMenuItemRequest(request.CategoryId, request.NameEn, request.NameAr, request.ImageUrl, request.Price, request.Description).IsSuccess == false)
             {
                 return Result<MenuRecords.MenuItemResponse>.Failure("Invalid request data.");
             }
@@ -114,7 +114,7 @@ namespace OrderingSystem.Application.Services
             existingMenuItem.NameEn = request.NameEn;
             existingMenuItem.Description = request.Description;
             existingMenuItem.Price = request.Price;
-            existingMenuItem.Emoji = request.Emoji;
+            existingMenuItem.ImageUrl = request.ImageUrl;
             existingMenuItem.IsAvailable = request.IsAvailable;
            await _menuItemRepository.UpdateMenuItemAsync(existingMenuItem);
            await _realTimeNotifier.NotifyMenuUpdatedAsync();

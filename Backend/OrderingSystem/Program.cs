@@ -311,6 +311,7 @@ var app = builder.Build();
 
 app.UseForwardedHeaders();
 app.UseExceptionHandler();
+app.UseStaticFiles();
 
 if (app.Environment.IsDevelopment())
 {

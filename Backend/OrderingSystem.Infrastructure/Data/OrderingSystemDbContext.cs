@@ -104,7 +104,7 @@ namespace OrderingSystem.Infrastructure.Data
                 entity.Property(e => e.NameAr).HasMaxLength(255);
                 entity.Property(e => e.NameEn).HasMaxLength(255);
 
-                entity.Property(e => e.Emoji).HasMaxLength(50).IsRequired(false);
+                entity.Property(e => e.ImageUrl).HasMaxLength(255).IsRequired(false);
 
                 entity.Property(e => e.IsDeleted).IsRequired();
 

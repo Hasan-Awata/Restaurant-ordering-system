@@ -3,7 +3,6 @@ using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Bills;
 using OrderingSystem.Application.Interfaces.Data;
 using OrderingSystem.Application.Interfaces.Notifications;
-using OrderingSystem.Application.Interfaces.OrdersInterfaces;
 using OrderingSystem.Application.Interfaces.SessionsInterfaces;
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
@@ -12,10 +11,6 @@ using OrderingSystem.Application.Mappers;
 using OrderingSystem.Domain.Common;
 using OrderingSystem.Domain.Entities;
 using OrderingSystem.Domain.Enums;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace OrderingSystem.Application.Services
 {
