@@ -297,10 +297,12 @@ builder.Services.AddCors(options =>
 
     options.AddPolicy("ProductionPolicy", builder =>
          builder.WithOrigins(
-                "https://orderingsystem.tech"
+                "https://orderingsystem.tech",
+                "https://web-five-tau-q7jp0rhb33.vercel.app"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-               .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent", "x-device-session-id")
+               //.WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent", "x-device-session-id")
+               .AllowAnyHeader() // Secure, since we have very few origins.
                .AllowCredentials());
 });
 
@@ -309,6 +311,7 @@ var app = builder.Build();
 
 app.UseForwardedHeaders();
 app.UseExceptionHandler();
+app.UseStaticFiles();
 
 if (app.Environment.IsDevelopment())
 {

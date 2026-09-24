@@ -34,7 +34,7 @@ namespace OrderingSystem.Infrastructure.Queries
                     m.NameEn,
                     m.Description,
                     m.Price,
-                    m.Emoji,
+                    m.ImageUrl,
                     m.IsAvailable
                 ))
                 .FirstOrDefaultAsync();
@@ -66,7 +66,7 @@ namespace OrderingSystem.Infrastructure.Queries
                     m.NameEn,
                     m.Description,
                     m.Price,
-                    m.Emoji,
+                    m.ImageUrl,
                     m.IsAvailable
                 ))
                 .ToListAsync();
@@ -91,7 +91,7 @@ namespace OrderingSystem.Infrastructure.Queries
                     m.NameEn,
                     m.Description,
                     m.Price,
-                    m.Emoji,
+                    m.ImageUrl,
                     m.IsAvailable
                 ))
                 .ToListAsync();
@@ -119,7 +119,7 @@ namespace OrderingSystem.Infrastructure.Queries
                     m.NameEn,
                     m.Description,
                     m.Price,
-                    m.Emoji,
+                    m.ImageUrl,
                     m.IsAvailable
                 ))
                 .ToListAsync();
@@ -158,7 +158,7 @@ namespace OrderingSystem.Infrastructure.Queries
                     m.NameEn,
                     m.Description,
                     m.Price,
-                    m.Emoji,
+                    m.ImageUrl,
                     m.IsAvailable
                 ))
                 .ToListAsync();

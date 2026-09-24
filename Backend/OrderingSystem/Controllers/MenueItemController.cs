@@ -4,7 +4,6 @@ using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged;
 using OrderingSystem.Application.Interfaces.MenueItem;
 using OrderingSystem.WebApi.Controllers.Base;
-using System.Threading.Tasks;
 
 namespace OrderingSystem.WebApi.Controllers
 {
@@ -12,15 +11,18 @@ namespace OrderingSystem.WebApi.Controllers
     [Route("api/menu-items")]
     public class MenuItemsController : BaseController
     {
+        private readonly IWebHostEnvironment _env; 
         private readonly IMenueItemCommandService _menuItemCommandService;
         private readonly IMenueItemQuery _menuItemQueryService;
 
         public MenuItemsController(
             IMenueItemCommandService menuItemCommandService,
-            IMenueItemQuery menuItemQueryService)
+            IMenueItemQuery menuItemQueryService,
+            IWebHostEnvironment env) 
         {
             _menuItemCommandService = menuItemCommandService;
             _menuItemQueryService = menuItemQueryService;
+            _env = env;
         }
 
         [Authorize(Policy = "AdminOnly")]
@@ -50,6 +52,31 @@ namespace OrderingSystem.WebApi.Controllers
         {
             var result = await _menuItemCommandService.DeleteMenuItemAsync(request);
             return HandleResult(result);
+        }
+
+        [Authorize(Policy = "AdminOnly")]
+        [HttpPost("upload")]
+        public async Task<IActionResult> UploadImage(IFormFile file)
+        {
+            if (file == null || file.Length == 0)
+                return BadRequest(new { error = "No file uploaded." });
+
+            // Fallback to current directory if WebRootPath is null in certain environments
+            var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            var uploadsFolder = Path.Combine(webRoot, "images");
+
+            if (!Directory.Exists(uploadsFolder)) Directory.CreateDirectory(uploadsFolder);
+
+            var uniqueFileName = Guid.NewGuid().ToString() + Path.GetExtension(file.FileName);
+            var filePath = Path.Combine(uploadsFolder, uniqueFileName);
+
+            using (var stream = new FileStream(filePath, FileMode.Create))
+            {
+                await file.CopyToAsync(stream);
+            }
+
+            // Returns a relative path that the frontend can use in the AddMenuItemRequest
+            return Ok(new { imageUrl = $"/images/{uniqueFileName}" });
         }
 
         [HttpGet("{id}")]

@@ -12,7 +12,7 @@ namespace OrderingSystem.Application.DTOs
       string NameEn,
       string Description,
       decimal Price,
-      string ? Emoji,
+      string ? ImageUrl,
       bool IsAvailable
   );
 
@@ -24,7 +24,7 @@ namespace OrderingSystem.Application.DTOs
             string NameEn,
             string Description,
             decimal Price,
-            string ?Emoji,
+            string ?ImageUrl,
             bool IsAvailable
         );
 
@@ -38,7 +38,7 @@ namespace OrderingSystem.Application.DTOs
          string NameEn,
          string Description,
             decimal Price,
-          string ? Emoji,
+          string ? ImageUrl,
              bool IsAvailable
 
 );
