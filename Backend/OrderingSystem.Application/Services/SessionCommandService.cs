@@ -58,59 +58,83 @@ namespace OrderingSystem.Application.Services
 
         public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(string qrCode, Guid? deviceSessionId = null)
         {
-            // 1. Cross-Table Interception: Lock the user into their existing active session
-            if (deviceSessionId.HasValue)
-            {
-                var existingDevice = await _deviceSessionRepository.GetDeviceSessionByIdAsync(deviceSessionId.Value);
+            // 1. Fetch the newly scanned table FIRST to compare it
+            var scannedTable = await _tableSessionRepository.GetTableWithActiveSessionAsync(qrCode);
 
-                if (existingDevice != null && existingDevice.TableSession.Status != enSessionStatus.Closed)
-                {
-                    // Return their existing session, ignoring the new QR code entirely
-                    return Result<SessionResponse>.Success(existingDevice.TableSession.ToResponse(existingDevice));
-                }
-            }
-
-            var table = await _tableSessionRepository.GetTableWithActiveSessionAsync(qrCode);
-
-            if (table == null)
+            if (scannedTable == null)
             {
                 return Result<SessionResponse>.Failure("Table was not found.", enErrorType.NotFound);
             }
 
-            if (table.Status == enTableStatus.Billing)
+            // 2. Cross-Table Interception & Business Rules
+            if (deviceSessionId.HasValue)
             {
-                var billingSession = table.Sessions.FirstOrDefault(s => s.ClosedAt == null);
-                if (billingSession != null && deviceSessionId.HasValue && billingSession.Devices.Any(d => d.DeviceSessionId == deviceSessionId.Value))
-                {
-                    return AccessTableSessionAsync(billingSession, deviceSessionId.Value);
-                }
+                var existingDevice = await _deviceSessionRepository.GetDeviceSessionByIdAsync(deviceSessionId.Value);
 
+                if (existingDevice != null)
+                {
+                    bool isOldSessionActive = existingDevice.TableSession.Status != enSessionStatus.Closed;
+                    bool isSameTable = existingDevice.TableSession.TableId == scannedTable.TableId;
+                    bool isOldTableBilling = existingDevice.TableSession.Table.Status == enTableStatus.Billing;
+
+                    if (isOldSessionActive)
+                    {
+                        if (isSameTable)
+                        {
+                            // RULE 1: They re-scanned their CURRENT table (whether Occupied or Billing).
+                            // Reconnect them so they can see their active session or their bill.
+                            return Result<SessionResponse>.Success(existingDevice.TableSession.ToResponse(existingDevice));
+                        }
+                        else
+                        {
+                            // RULE 2: They scanned a DIFFERENT table.
+                            if (!isOldTableBilling)
+                            {
+                                // Their old table is still active/occupied. Lock them in!
+                                // Return their OLD session data, completely ignoring the new QR code.
+                                return Result<SessionResponse>.Success(existingDevice.TableSession.ToResponse(existingDevice));
+                            }
+                            else
+                            {
+                                // RULE 3: Their old table is Billing. They are free to leave.
+                                // Wipe the ID so they get a fresh session at the new table.
+                                deviceSessionId = null;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // RULE 4: Their old session is completely Closed.
+                        // Wipe the ID to prevent a Primary Key violation on the new insertion.
+                        deviceSessionId = null;
+                    }
+                }
+            }
+
+            // 3. Process new customer logic for the scanned table
+            if (scannedTable.Status == enTableStatus.Billing)
+            {
+                // If they belonged to this billing table, the 'isSameTable' check above would have caught them.
+                // Reaching this point means a STRANGER just scanned a table that is currently paying.
                 return Result<SessionResponse>.Failure("This table is currently processing payment. Please wait until it is cleared.", enErrorType.Conflict);
             }
 
-            var activeSession = table.Sessions.FirstOrDefault(s => s.ClosedAt == null && s.Status != enSessionStatus.Closed);
+            var activeSession = scannedTable.Sessions.FirstOrDefault(s => s.ClosedAt == null && s.Status != enSessionStatus.Closed);
 
             if (activeSession != null)
             {
-                if (deviceSessionId.HasValue && activeSession.Devices.Any(d => d.DeviceSessionId == deviceSessionId.Value))
-                {
-                    return AccessTableSessionAsync(activeSession, deviceSessionId.Value);
-                }
-
-                return await JoinTableSessionAsync(activeSession, Guid.CreateVersion7());
+                return await JoinTableSessionAsync(activeSession, deviceSessionId ?? Guid.CreateVersion7());
             }
 
             try
             {
                 Result<SessionResponse>? activationResult = null;
 
-                // --- Transaction Wrapper Added ---
                 await _unitOfWork.ExecuteTransactionAsync(async () =>
                 {
-                    table.Status = enTableStatus.Occupied;
-                    await _tableRepository.UpdateTableAsync(table);
-                    //activationResult = await ActivateTableSessionAsync(table.TableId, deviceSessionId ?? Guid.CreateVersion7());
-                    activationResult = await ActivateTableSessionAsync(table.TableId, Guid.CreateVersion7());
+                    scannedTable.Status = enTableStatus.Occupied;
+                    await _tableRepository.UpdateTableAsync(scannedTable);
+                    activationResult = await ActivateTableSessionAsync(scannedTable.TableId, deviceSessionId ?? Guid.CreateVersion7());
                 });
 
                 return activationResult!;
