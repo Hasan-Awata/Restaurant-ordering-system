@@ -129,7 +129,7 @@ namespace OrderingSystem.Application.Services
                 {
                     scannedTable.Status = enTableStatus.Occupied;
                     await _tableRepository.UpdateTableAsync(scannedTable);
-                    activationResult = await ActivateTableSessionAsync(scannedTable.TableId, deviceSessionId ?? Guid.CreateVersion7());
+                    activationResult = await CreatePendingSessionAsync(scannedTable.TableId, deviceSessionId ?? Guid.CreateVersion7());
                 });
 
                 return activationResult!;
@@ -148,7 +148,7 @@ namespace OrderingSystem.Application.Services
             }
         }
 
-        private async Task<Result<SessionResponse>> ActivateTableSessionAsync(int tableId, Guid deviceSessionId)
+        private async Task<Result<SessionResponse>> CreatePendingSessionAsync(int tableId, Guid deviceSessionId)
         {
             var tableSession = new TableSession
             {
@@ -190,18 +190,6 @@ namespace OrderingSystem.Application.Services
             return Result<SessionResponse>.Success(SessionsMappers.ToResponse(tableSession, deviceSession));
         }
 
-        private Result<SessionResponse> AccessTableSessionAsync(TableSession activeSession, Guid deviceSessionId)
-        {
-            var deviceSession = activeSession.Devices.FirstOrDefault(d => d.DeviceSessionId == deviceSessionId);
-
-            if (deviceSession == null)
-            {
-                return Result<SessionResponse>.Failure("Invalid or expired device session", enErrorType.Unauthorized);
-            }
-
-            return Result<SessionResponse>.Success(SessionsMappers.ToResponse(activeSession, deviceSession));
-        }
-
         private void RevokeSessionInCache(Guid tableSessionId)
         {
             _cache.Set($"revoked_table_session_{tableSessionId}", true, TimeSpan.FromHours(4));
@@ -227,7 +215,15 @@ namespace OrderingSystem.Application.Services
             var hostDevice = session.Devices.FirstOrDefault(d => d.Role == enDeviceRole.Host);
             if (hostDevice != null)
             {
+                // 1. Notify the host that the cashier approved them
                 await _notifier.NotifyHostOfTableActivationAsync(hostDevice.DeviceSessionId, session.TableSessionId);
+
+                // 2. Look for guests who joined during the "Waiting for Cashier" phase and re-fire their notifications
+                var pendingGuests = session.Devices.Where(d => d.Role == enDeviceRole.Guest && !d.IsApproved).ToList();
+                foreach (var guest in pendingGuests)
+                {
+                    await _notifier.NotifyHostOfGuestJoinAsync(session.TableSessionId, guest.DeviceSessionId);
+                }
             }
 
             await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, session.Status);
