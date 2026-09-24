@@ -510,7 +510,8 @@ builder.Services.AddCors(options =>
 
     options.AddPolicy("ProductionPolicy", builder =>
          builder.WithOrigins(
-                "https://orderingsystem.tech"
+                "https://orderingsystem.tech",
+                "https://web-five-tau-q7jp0rhb33.vercel.app/"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent", "x-device-session-id")
@@ -1262,6 +1263,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.Interfaces.Authentication;
 using OrderingSystem.Application.Interfaces.TableSessionInterfaces;
+using OrderingSystem.Domain.Enums;
 using OrderingSystem.WebApi.Controllers.Base;
 
 namespace OrderingSystem.WebApi.Controllers
@@ -1380,6 +1382,22 @@ namespace OrderingSystem.WebApi.Controllers
         [HttpGet("{tableSessionId}/bill")]
         public async Task<IActionResult> GetBillSummary(Guid tableSessionId)
         {
+            // 1. Check if the user is a Staff member (Admin or Cashier)
+            bool isStaff = User.IsInRole(enRoleType.Admin.ToString()) ||
+                           User.IsInRole(enRoleType.Cashier.ToString());
+
+            // 2. If not staff, enforce strict device session validation
+            if (!isStaff)
+            {
+                if (!CurrentDeviceSessionId.HasValue)
+                    return Unauthorized(new { error = "Invalid or missing device session." });
+
+                var status = await _sessionQueryService.GetSessionPollingStatusAsync(tableSessionId, CurrentDeviceSessionId.Value);
+                if (status == null || !status.IsDeviceApproved)
+                    return Unauthorized(new { error = "You must be approved by the host to view table data." });
+            }
+
+            // 3. Fetch and return the bill
             var result = await _sessionQueryService.GetBillSummaryAsync(tableSessionId);
 
             if (result == null)
@@ -3708,6 +3726,18 @@ namespace OrderingSystem.Application.Services
 
         public async Task<Result<SessionResponse>> ProcessTableQrCodeAsync(string qrCode, Guid? deviceSessionId = null)
         {
+            // 1. Cross-Table Interception: Lock the user into their existing active session
+            if (deviceSessionId.HasValue)
+            {
+                var existingDevice = await _deviceSessionRepository.GetDeviceSessionByIdAsync(deviceSessionId.Value);
+
+                if (existingDevice != null && existingDevice.TableSession.Status != enSessionStatus.Closed)
+                {
+                    // Return their existing session, ignoring the new QR code entirely
+                    return Result<SessionResponse>.Success(existingDevice.TableSession.ToResponse(existingDevice));
+                }
+            }
+
             var table = await _tableSessionRepository.GetTableWithActiveSessionAsync(qrCode);
 
             if (table == null)
@@ -3918,8 +3948,9 @@ namespace OrderingSystem.Application.Services
             if (session == null)
                 return Result.Failure("No active table session was found.", enErrorType.NotFound);
 
-            if (!session.Devices.Any(d => d.DeviceSessionId == deviceSessionId))
-                return Result.Failure("You are not authorized to request the bill for this table.", enErrorType.Unauthorized);
+            var device = session.Devices.FirstOrDefault(d => d.DeviceSessionId == deviceSessionId);
+            if (device == null || device.Role != enDeviceRole.Host)
+                return Result.Failure("Only the table host is authorized to request the bill.", enErrorType.Unauthorized);
 
             if (!session.Orders.Any(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served))
                 return Result.Failure("No approved orders available for billing.", enErrorType.Validation);
@@ -3942,6 +3973,35 @@ namespace OrderingSystem.Application.Services
                 return Result<SessionResponse>.Failure("No active table session was found.", enErrorType.NotFound);
 
             var validOrders = session.Orders.Where(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served).ToList();
+
+            if (!validOrders.Any())
+            {
+                await _unitOfWork.ExecuteTransactionAsync(async () =>
+                {
+                    session.Status = enSessionStatus.Closed;
+                    session.ClosedAt = DateTime.UtcNow;
+
+                    var orphanedPendingOrders = session.Orders.Where(o => o.OrderStatus == enOrderStatus.Pending).ToList();
+                    foreach (var orphaned in orphanedPendingOrders) orphaned.OrderStatus = enOrderStatus.Cancelled;
+                    if (orphanedPendingOrders.Any()) await _orderRepository.UpdateOrdersAsync(orphanedPendingOrders);
+
+                    await _tableSessionRepository.UpdateSessionAsync(session);
+
+                    var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                    if (table != null)
+                    {
+                        table.Status = enTableStatus.Available;
+                        await _tableRepository.UpdateTableAsync(table);
+                    }
+                });
+
+                RevokeSessionInCache(tableSessionId);
+                await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
+                await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
+
+                return Result<SessionResponse>.Success(session.ToResponse(null));
+            }
+
             var allOrderItems = validOrders.SelectMany(o => o.OrderItems).ToList();
 
             var consolidatedItems = allOrderItems

@@ -298,7 +298,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("ProductionPolicy", builder =>
          builder.WithOrigins(
                 "https://orderingsystem.tech",
-                "https://web-five-tau-q7jp0rhb33.vercel.app/"
+                "https://web-five-tau-q7jp0rhb33.vercel.app"
                )
                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                .WithHeaders("Authorization", "Content-Type", "x-requested-with", "x-signalr-user-agent", "x-device-session-id")
