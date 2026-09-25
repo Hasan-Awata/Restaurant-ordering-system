@@ -311,7 +311,29 @@ var app = builder.Build();
 
 app.UseForwardedHeaders();
 app.UseExceptionHandler();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        var requestOrigin = ctx.Context.Request.Headers.Origin.ToString();
+        var allowedOrigins = new[]
+        {
+            "https://orderingsystem.tech",
+            "https://web-five-tau-q7jp0rhb33.vercel.app"
+        };
+
+        // Apply specific origins for production to match your ProductionPolicy
+        if (!string.IsNullOrEmpty(requestOrigin) && allowedOrigins.Contains(requestOrigin))
+        {
+            ctx.Context.Response.Headers.Append("Access-Control-Allow-Origin", requestOrigin);
+        }
+        // Allow all in development to match your DevelopmentPolicy
+        else if (app.Environment.IsDevelopment())
+        {
+            ctx.Context.Response.Headers.Append("Access-Control-Allow-Origin", "*");
+        }
+    }
+});
 
 if (app.Environment.IsDevelopment())
 {
