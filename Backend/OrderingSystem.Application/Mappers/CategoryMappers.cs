@@ -8,7 +8,7 @@ namespace OrderingSystem.Application.Mappers
 {
     public static class CategoryMappers
     {
-        public static Category ToEntity(CategoriesRecords.AddCategoryRequest request)
+        public static Category? ToEntity(CategoriesRecords.AddCategoryRequest request)
         {
             if (request == null)
             {
@@ -23,7 +23,7 @@ namespace OrderingSystem.Application.Mappers
             };
         }
 
-        public static CategoriesRecords.CategoryResponse ToResponse(this Category category)
+        public static CategoriesRecords.CategoryResponse? ToResponse(this Category category)
         {
             if (category == null)
             {
