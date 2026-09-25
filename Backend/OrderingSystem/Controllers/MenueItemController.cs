@@ -64,34 +64,55 @@ namespace OrderingSystem.WebApi.Controllers
             if (file == null || file.Length == 0)
                 return BadRequest(new { error = "No file uploaded." });
 
-            // Fallback to current directory if WebRootPath is null in certain environments
+            // 1. Validate File Size (Max 5 MB)
+            const long maxFileSize = 5 * 1024 * 1024;
+            if (file.Length > maxFileSize)
+                return BadRequest(new { error = "File exceeds the 5MB size limit." });
+
+            // 2. Validate File Extension
+            var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
+            var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+            if (string.IsNullOrEmpty(extension) || !allowedExtensions.Contains(extension))
+                return BadRequest(new { error = "Invalid file extension. Only JPG, PNG, and WEBP are allowed." });
+
+            // 3. Validate MIME Type
+            var allowedMimeTypes = new[] { "image/jpeg", "image/png", "image/webp" };
+            var mimeType = file.ContentType.ToLowerInvariant();
+            if (!allowedMimeTypes.Contains(mimeType))
+                return BadRequest(new { error = "Invalid file content type." });
+
             var webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
             var uploadsFolder = Path.Combine(webRoot, "images");
 
             if (!Directory.Exists(uploadsFolder)) Directory.CreateDirectory(uploadsFolder);
 
-            // Force the extension to .webp for optimal web delivery
             var uniqueFileName = Guid.NewGuid().ToString() + ".webp";
             var filePath = Path.Combine(uploadsFolder, uniqueFileName);
 
-            using (var stream = file.OpenReadStream())
-            using (var image = await Image.LoadAsync(stream))
+            try
             {
-                // Resize while maintaining aspect ratio, capping max dimensions to 600x600
-                image.Mutate(x => x.Resize(new ResizeOptions
+                // 4. Load, Resize, and Compress
+                using (var stream = file.OpenReadStream())
+                using (var image = await Image.LoadAsync(stream))
                 {
-                    Size = new Size(600, 600),
-                    Mode = ResizeMode.Max
-                }));
+                    image.Mutate(x => x.Resize(new ResizeOptions
+                    {
+                        Size = new Size(600, 600),
+                        Mode = ResizeMode.Max
+                    }));
 
-                // Compress and save as WebP
-                await image.SaveAsWebpAsync(filePath, new WebpEncoder
-                {
-                    Quality = 75 // Balances visual fidelity with minimal file size
-                });
+                    await image.SaveAsWebpAsync(filePath, new WebpEncoder
+                    {
+                        Quality = 75
+                    });
+                }
+            }
+            catch
+            {
+                // If Image.LoadAsync fails, the file headers are corrupt or an attacker disguised an executable as a .jpg
+                return BadRequest(new { error = "The uploaded file is corrupt or not a valid image." });
             }
 
-            // Returns a relative path that the frontend can use in the AddMenuItemRequest
             return Ok(new { imageUrl = $"/images/{uniqueFileName}" });
         }
 
