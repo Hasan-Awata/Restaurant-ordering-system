@@ -299,6 +299,9 @@ namespace OrderingSystem.Application.Services
             if (device == null || device.Role != enDeviceRole.Host)
                 return Result.Failure("Only the table host is authorized to request the bill.", enErrorType.Unauthorized);
 
+            if (session.Orders.Any(o => o.OrderStatus == enOrderStatus.Pending))
+                return Result.Failure("Cannot request the bill while there are pending orders. Please cancel them or wait for the cashiers' action.", enErrorType.Conflict);
+
             if (!session.Orders.Any(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served))
                 return Result.Failure("No approved orders available for billing.", enErrorType.Validation);
 
@@ -320,33 +323,19 @@ namespace OrderingSystem.Application.Services
                 return Result<SessionResponse>.Failure("No active table session was found.", enErrorType.NotFound);
 
             var validOrders = session.Orders.Where(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served).ToList();
+            var activeTaxes = await _taxRepository.GetActiveTaxesAsync();
 
+            // --- EDGE CASE VALIDATION ---
             if (!validOrders.Any())
             {
-                await _unitOfWork.ExecuteTransactionAsync(async () =>
+                // Check if there is a flat rate tax that applies globally (per bill or per guest)
+                bool hasFixedTaxes = activeTaxes.Any(t => t.TaxType == enTaxType.FlatRate &&
+                                                          (t.TaxScope == enTaxScope.PerBill || t.TaxScope == enTaxScope.PerGuest));
+
+                if (!hasFixedTaxes)
                 {
-                    session.Status = enSessionStatus.Closed;
-                    session.ClosedAt = DateTime.UtcNow;
-
-                    var orphanedPendingOrders = session.Orders.Where(o => o.OrderStatus == enOrderStatus.Pending).ToList();
-                    foreach (var orphaned in orphanedPendingOrders) orphaned.OrderStatus = enOrderStatus.Cancelled;
-                    if (orphanedPendingOrders.Any()) await _orderRepository.UpdateOrdersAsync(orphanedPendingOrders);
-
-                    await _tableSessionRepository.UpdateSessionAsync(session);
-
-                    var table = await _tableRepository.GetTableByIdAsync(session.TableId);
-                    if (table != null)
-                    {
-                        table.Status = enTableStatus.Available;
-                        await _tableRepository.UpdateTableAsync(table);
-                    }
-                });
-
-                RevokeSessionInCache(tableSessionId);
-                await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
-                await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
-
-                return Result<SessionResponse>.Success(session.ToResponse(null));
+                    return Result<SessionResponse>.Failure("This session has no orders and no fixed taxes. It is considered invalid. Please use the 'Delete Session' action instead.", enErrorType.Validation);
+                }
             }
 
             var allOrderItems = validOrders.SelectMany(o => o.OrderItems).ToList();
@@ -365,10 +354,9 @@ namespace OrderingSystem.Application.Services
 
             decimal totalSubTotal = consolidatedItems.Sum(i => i.TotalPrice);
             int totalItemsCount = consolidatedItems.Sum(i => i.Quantity);
-
             int uniqueGuestsCount = session.Devices.Count(d => d.IsApproved);
 
-            var activeTaxes = await _taxRepository.GetActiveTaxesAsync();
+            // If subTotal and itemsCount are 0, this flawlessly outputs only the FlatRate taxes.
             var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, uniqueGuestsCount, totalItemsCount, activeTaxes);
 
             var finalBill = new Bill
@@ -387,7 +375,6 @@ namespace OrderingSystem.Application.Services
                 }).ToList()
             };
 
-            // --- Transaction Wrapper Maintained ---
             await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
                 await _billRepository.AddBillAsync(finalBill);
@@ -417,6 +404,38 @@ namespace OrderingSystem.Application.Services
             await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
+        }
+
+        public async Task<Result> DeleteInvalidSessionAsync(Guid tableSessionId)
+        {
+            var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
+            if (session == null)
+                return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            // Bypasses the constraint checking for preparing/served orders since this is an explicit cashier void action
+            await _unitOfWork.ExecuteTransactionAsync(async () =>
+            {
+                if (session.Orders != null && session.Orders.Any())
+                {
+                    await _orderRepository.HardDeleteOrdersAsync(session.Orders);
+                }
+
+                await _tableSessionRepository.DeleteSessionAsync(session);
+
+                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                if (table != null)
+                {
+                    table.Status = enTableStatus.Available;
+                    await _tableRepository.UpdateTableAsync(table);
+                }
+            });
+
+            RevokeSessionInCache(tableSessionId);
+
+            await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(tableSessionId, enSessionStatus.Closed);
+
+            return Result.Success();
         }
 
         public async Task<Result> DismissTableSessionAsync(Guid tableSessionId)
