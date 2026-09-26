@@ -62,36 +62,39 @@ namespace OrderingSystem.Infrastructure.Queries
             foreach (var device in session.Devices)
             {
                 var deviceOrders = session.Orders.Where(o => o.DeviceSessionId == device.DeviceSessionId).ToList();
-                if (!deviceOrders.Any()) continue;
 
                 decimal guestSubTotal = 0;
-                int guestItemsCount = 0; 
+                int guestItemsCount = 0;
+                var billItems = new List<BillItemResponse>();
 
-                var billItems = deviceOrders.SelectMany(o => o.OrderItems)
-                    .GroupBy(oi => oi.MenuItemId)
-                    .Select(g =>
-                    {
-                        var first = g.First();
-                        var qty = g.Sum(i => i.Quantity);
-                        var itemTotal = qty * first.UnitPrice;
+                if (deviceOrders.Any())
+                {
+                    billItems = deviceOrders.SelectMany(o => o.OrderItems)
+                        .GroupBy(oi => oi.MenuItemId)
+                        .Select(g =>
+                        {
+                            var first = g.First();
+                            var qty = g.Sum(i => i.Quantity);
+                            var itemTotal = qty * first.UnitPrice;
 
-                        guestSubTotal += itemTotal;
-                        totalItemsCount += qty;
-                        guestItemsCount += qty; 
+                            guestSubTotal += itemTotal;
+                            totalItemsCount += qty;
+                            guestItemsCount += qty;
 
-                        return new BillItemResponse(
-                            first.MenuItemId,
-                            first.MenuItem?.NameEn ?? "Deleted",
-                            first.MenuItem?.NameAr ?? "محذوف",
-                            qty,
-                            first.UnitPrice,
-                            itemTotal
-                        );
-                    }).ToList();
+                            return new BillItemResponse(
+                                first.MenuItemId,
+                                first.MenuItem?.NameEn ?? "Deleted",
+                                first.MenuItem?.NameAr ?? "محذوف",
+                                qty,
+                                first.UnitPrice,
+                                itemTotal
+                            );
+                        }).ToList();
+                }
 
                 totalSubTotal += guestSubTotal;
 
-                // --- 3. CALCULATE SPLIT TOTALS & PASS TO CONSTRUCTOR ---
+                // The TaxCalculationService already handles 0 subtotals flawlessly for flat rates
                 decimal guestTax = _taxCalculationService.CalculateGuestTaxAmount(
                                     guestSubTotal,
                                     guestItemsCount,
@@ -100,10 +103,14 @@ namespace OrderingSystem.Infrastructure.Queries
 
                 decimal guestGrandTotal = guestSubTotal + guestTax;
 
-                guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, billItems, guestSubTotal, guestTax, guestGrandTotal));
+                // Only add the guest to the breakdown if they actually owe something, OR if they are the Host (so the host always sees their panel)
+                if (guestGrandTotal > 0 || device.Role == enDeviceRole.Host)
+                {
+                    guestBills.Add(new GuestBillResponse(device.DeviceSessionId, device.Role, billItems, guestSubTotal, guestTax, guestGrandTotal));
+                }
             }
 
-            var uniqueGuests = session.Devices.Count;
+                var uniqueGuests = session.Devices.Count;
 
             var taxResult = _taxCalculationService.CalculateTaxes(totalSubTotal, approvedGuestsCount, totalItemsCount, activeTaxes);
             var grandTotal = totalSubTotal + taxResult.TotalTaxAmount;

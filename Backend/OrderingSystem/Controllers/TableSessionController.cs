@@ -75,6 +75,16 @@ namespace OrderingSystem.WebApi.Controllers
             return HandleResult(result);
         }
 
+        // ── CASHIER PATH: Delete invalid sessions ───────────────────────────────
+        [Authorize(Policy = "RequireStaff")]
+        [HttpPost("delete")]
+        public async Task<IActionResult> DeleteTableSession([FromBody] ActivateTableSessionRequest request)
+        {
+            // Reusing ActivateTableSessionRequest since it effectively wraps the TableSessionId
+            var result = await _sessionCommandService.DeleteInvalidSessionAsync(request.tableSessionId);
+            return HandleResult(result);
+        }
+
         // ── CUSTOMER PATH: Approve the guests ───────────────────────────────────
         [HttpPost("approve")]
         public async Task<IActionResult> ApproveGuest([FromBody] ApproveJoiningSessionRequest request)

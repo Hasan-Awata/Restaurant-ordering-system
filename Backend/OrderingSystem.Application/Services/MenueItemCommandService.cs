@@ -17,7 +17,7 @@ namespace OrderingSystem.Application.Services
     {
         private IRealTimeNotifier _realTimeNotifier;
 
-        private Result<MenuRecords.MenuItemResponse> ValidateAddMenuItemRequest(int categoryId,string nameEn,string nameAr,string imageUrl,decimal price,string description)
+        private Result<MenuRecords.MenuItemResponse> ValidateAddMenuItemRequest(int categoryId,string nameEn,string nameAr,string? imageUrl,decimal price,string description)
         {
            
             if (categoryId <= 0)
