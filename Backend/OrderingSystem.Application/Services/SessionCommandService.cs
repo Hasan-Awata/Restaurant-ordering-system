@@ -302,8 +302,19 @@ namespace OrderingSystem.Application.Services
             if (session.Orders.Any(o => o.OrderStatus == enOrderStatus.Pending))
                 return Result.Failure("Cannot request the bill while there are pending orders. Please cancel them or wait for the cashiers' action.", enErrorType.Conflict);
 
-            if (!session.Orders.Any(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served))
-                return Result.Failure("No approved orders available for billing.", enErrorType.Validation);
+            bool hasValidOrders = session.Orders.Any(o => o.OrderStatus == enOrderStatus.Preparing || o.OrderStatus == enOrderStatus.Served);
+
+            if (!hasValidOrders)
+            {
+                var activeTaxes = await _taxRepository.GetActiveTaxesAsync();
+                bool hasFixedTaxes = activeTaxes.Any(t => t.TaxType == enTaxType.FlatRate &&
+                                                          (t.TaxScope == enTaxScope.PerBill || t.TaxScope == enTaxScope.PerGuest));
+
+                if (!hasFixedTaxes)
+                {
+                    return Result.Failure("No approved orders available for billing, and no fixed taxes apply.", enErrorType.Validation);
+                }
+            }
 
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
 
