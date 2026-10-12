@@ -4,6 +4,7 @@ using OrderingSystem.Application.DTOs;
 using OrderingSystem.Application.DTOs.Paged; 
 using OrderingSystem.Application.Interfaces.TableInterfaces;
 using OrderingSystem.Domain.Enums;
+using OrderingSystem.Infrastructure.Queries;
 using System.Threading.Tasks;
 
 namespace OrderingSystem.WebApi.Controllers
@@ -111,16 +112,16 @@ namespace OrderingSystem.WebApi.Controllers
         }
 
         [HttpGet("pending-activation")]
-        public async Task<IActionResult> GetAllPendingActivationTables([FromQuery] PageDTO page)
+        public async Task<IActionResult> GetAllPendingActivationTables([FromQuery] PageDTO page, [FromQuery] int floorNumber)
         {
-            var result = await _tableQueryService.GetAllPendingActivationTablesAsync(page);
+            var result = await _tableQueryService.GetAllPendingActivationTablesAsync(page, floorNumber);
             return Ok(result);
         }
 
         [HttpGet("billing")]
-        public async Task<IActionResult> GetAllBillingTables([FromQuery] PageDTO page)
+        public async Task<IActionResult> GetAllBillingTables([FromQuery] PageDTO page, [FromQuery] int floorNumber)
         {
-            var result = await _tableQueryService.GetAllBillingTablesAsync(page);
+            var result = await _tableQueryService.GetAllBillingTablesAsync(page, floorNumber);
             return Ok(result);
         }
     }

@@ -7,14 +7,14 @@ namespace OrderingSystem.Application.Interfaces.Notifications
 {
     public interface IRealTimeNotifier
     {
-        public Task NotifyCashiersOfActivationAsync(int tableId, Guid tableSessionId);
+        public Task NotifyCashiersOfActivationAsync(int tableId, Guid tableSessionId, int floorNumber);
         public Task NotifyHostOfGuestJoinAsync(Guid tableSessionId, Guid guestDeviceSessionId);
         public Task NotifyGuestOfApprovalAsync(Guid guestDeviceSessionId);
         public Task NotifyHostOfTableActivationAsync(Guid hostDeviceSessionId, Guid tableSessionId);
-        public Task NotifyCashierOfNewOrderAsync(int orderId, Guid tableSessionId);
+        public Task NotifyCashierOfNewOrderAsync(int orderId, Guid tableSessionId, int floorNumber);
         public Task NotifyCustomerOfOrderStatusAsync(Guid deviceSessionId, int orderId, enOrderStatus status);
-        public Task NotifyCashiersOfCustomerCancellationAsync(int orderId, Guid tableSessionId);
-        public Task NotifyCashiersOfBillRequestAsync(Guid tableSessionId, int tableNumber);
+        public Task NotifyCashiersOfCustomerCancellationAsync(int orderId, Guid tableSessionId, int floorNumber);
+        public Task NotifyCashiersOfBillRequestAsync(Guid tableSessionId, int tableNumber, int floorNumber);
         public Task NotifyMenuUpdatedAsync();
         public Task NotifyCustomerOfActivationDismissedAsync(Guid tableSessionId);
         public Task NotifyCustomerOfBillRejectedAsync(Guid tableSessionId);
@@ -23,9 +23,9 @@ namespace OrderingSystem.Application.Interfaces.Notifications
         public Task NotifyGuestsOfBillRequestAsync(Guid tableSessionId);
         public Task NotifyTaxesUpdatedAsync();
         public Task NotifyGuestOfRejectionAsync(Guid guestDeviceSessionId);
-        public Task NotifyCashiersOfZombieSessionClearedAsync(Guid tableSessionId);
-        public Task NotifyCashiersOfOrderSyncAsync(int orderId, enOrderStatus status);
-        public Task NotifyCashiersOfTableSessionSyncAsync(Guid tableSessionId, enSessionStatus status);
-        public Task NotifyCashiersOfBillSyncAsync(Guid tableSessionId);
+        public Task NotifyCashiersOfZombieSessionClearedAsync(Guid tableSessionId, int floorNumber);
+        public Task NotifyCashiersOfOrderSyncAsync(int orderId, enOrderStatus status, int floorNumber);
+        public Task NotifyCashiersOfTableSessionSyncAsync(Guid tableSessionId, enSessionStatus status, int floorNumber);
+        public Task NotifyCashiersOfBillSyncAsync(Guid tableSessionId, int floorNumber);
     }
 }

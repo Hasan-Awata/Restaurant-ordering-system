@@ -90,7 +90,7 @@ namespace OrderingSystem.Application.Services
             };
 
             await _orderRepository.AddOrderAsync(order);
-            await _notifier.NotifyCashierOfNewOrderAsync(order.OrderId, order.TableSessionId);
+            await _notifier.NotifyCashierOfNewOrderAsync(order.OrderId, order.TableSessionId, deviceSession.TableSession.Table.FloorNumber);
 
             // --- 3. USE THE PRE-MAPPED LIST ---
             var response = new OrderRecords.OrderResponse(order.OrderId, request.TableNumber, order.TotalAmount, order.OrderStatus, order.CreatedAt, responseItems);
@@ -114,7 +114,7 @@ namespace OrderingSystem.Application.Services
             await _notifier.NotifyCustomerOfOrderStatusAsync(order.DeviceSessionId, order.OrderId, order.OrderStatus);
 
             // Notify Cashier
-            await _notifier.NotifyCashiersOfOrderSyncAsync(order.OrderId, order.OrderStatus);
+            await _notifier.NotifyCashiersOfOrderSyncAsync(order.OrderId, order.OrderStatus, order.Session.Table.FloorNumber);
 
             return Result<bool>.Success(true);
         }
@@ -152,8 +152,8 @@ namespace OrderingSystem.Application.Services
             await _orderRepository.UpdateOrderAsync(order);
 
             // 4. Notification
-            await _notifier.NotifyCashiersOfCustomerCancellationAsync(order.OrderId, order.TableSessionId);
-            await _notifier.NotifyCashiersOfOrderSyncAsync(order.OrderId, order.OrderStatus);
+            await _notifier.NotifyCashiersOfCustomerCancellationAsync(order.OrderId, order.TableSessionId, order.Session.Table.FloorNumber);
+            await _notifier.NotifyCashiersOfOrderSyncAsync(order.OrderId, order.OrderStatus, order.Session.Table.FloorNumber);
 
 
             return Result<bool>.Success(true);

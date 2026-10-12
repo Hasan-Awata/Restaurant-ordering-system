@@ -25,9 +25,9 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task<Order?> GetOrderByIdAsync(int orderId)
         {
             return await _context.Orders
-                .Include(o => o.OrderItems)
-                    .ThenInclude(oi => oi.MenuItem)
-                .Include(o => o.Device)
+                .Include(o => o.Device) 
+                .Include(o => o.Session)
+                    .ThenInclude(s => s.Table) 
                 .FirstOrDefaultAsync(o => o.OrderId == orderId);
         }
 

@@ -28,10 +28,12 @@ namespace OrderingSystem.Infrastructure.Repositories
         public async Task<TableSession?> GetActiveTableSessionWithOrdersAndDevicesAsync(Guid tableSessionId)
         {
             return await _context.TableSessions
-                .IgnoreQueryFilters() // Bypasses the IsDeleted filter so legacy checkout data maps correctly
+                .IgnoreQueryFilters()
                 .Include(s => s.Orders)
                     .ThenInclude(o => o.OrderItems).ThenInclude(oi => oi.MenuItem)
                 .Include(s => s.Devices)
+                .Include(s => s.Table) 
+                .AsSplitQuery()        // <--- PREVENTS CARTESIAN EXPLOSION MEMORY BLOAT
                 .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId && s.ClosedAt == null);
         }
 
@@ -44,7 +46,8 @@ namespace OrderingSystem.Infrastructure.Repositories
        public async Task<TableSession?> GetSessionByIdAsync(Guid tableSessionId)
         {
             return await _context.TableSessions
-                .Include(s => s.Devices) 
+                .Include(s => s.Devices)
+                .Include(s => s.Table)
                 .FirstOrDefaultAsync(s => s.TableSessionId == tableSessionId);
         }
 

@@ -48,13 +48,15 @@ namespace OrderingSystem.Infrastructure.Queries
             return (startUtc, endUtc);
         }
 
-        public async Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page)
+        public async Task<Result<PagedResponse<OrderRecords.OrderResponse>>> GetPendingOrdersAsync(PageDTO page, int floorNumber)
         {
             var query = _context.Orders
                 .AsNoTracking()
+                .Include(o => o.Session)
+                    .ThenInclude(s => s.Table)
                 .Include(o => o.OrderItems)
                     .ThenInclude(oi => oi.MenuItem)
-                .Where(o => o.OrderStatus == enOrderStatus.Pending);
+                .Where(o => o.OrderStatus == enOrderStatus.Pending && o.Session.Table.FloorNumber == floorNumber);
 
             var totalRecords = await query.CountAsync();
 

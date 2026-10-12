@@ -145,11 +145,13 @@ namespace OrderingSystem.Infrastructure.Queries
             return new PagedResponse<TableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
 
-        public async Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page)
+        public async Task<PagedResponse<PendingTableResponse>> GetAllPendingActivationTablesAsync(PageDTO page, int floorNumber)
         {
             var query = _context.Tables
-                .AsNoTracking()
-                .Where(t => t.Status == enTableStatus.Occupied && t.Sessions.Any(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null));
+            .AsNoTracking()
+            .Where(t => t.FloorNumber == floorNumber && 
+                        t.Status == enTableStatus.Occupied &&
+                        t.Sessions.Any(s => s.Status == enSessionStatus.PendingActivation && s.ClosedAt == null));
 
             var totalRecords = await query.CountAsync();
 
@@ -176,11 +178,13 @@ namespace OrderingSystem.Infrastructure.Queries
             return new PagedResponse<PendingTableResponse>(tables, totalRecords, page.PageNumber, page.PageSize);
         }
 
-        public async Task<PagedResponse<PendingTableResponse>> GetAllBillingTablesAsync(PageDTO page)
+        public async Task<PagedResponse<PendingTableResponse>> GetAllBillingTablesAsync(PageDTO page, int floorNumber)
         {
             var query = _context.Tables
                 .AsNoTracking()
-                .Where(t => t.Status == enTableStatus.Billing && t.Sessions.Any(s => s.ClosedAt == null));
+                .Where(t => t.FloorNumber == floorNumber && 
+                            t.Status == enTableStatus.Billing &&
+                            t.Sessions.Any(s => s.ClosedAt == null));
 
             var totalRecords = await query.CountAsync();
 

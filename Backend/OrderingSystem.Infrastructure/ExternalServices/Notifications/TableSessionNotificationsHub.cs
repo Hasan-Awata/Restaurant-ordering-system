@@ -28,14 +28,21 @@ namespace OrderingSystem.Infrastructure.ExternalServices.Notifications
             var role = user.FindFirst(ClaimTypes.Role)?.Value ?? user.FindFirst("role")?.Value;
             if (!string.IsNullOrEmpty(role))
             {
-                if (role == enRoleType.Cashier.ToString() || role == enRoleType.Admin.ToString())
+                if (role == enRoleType.Cashier.ToString())
                 {
-                    await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Cashiers);
+                    // Read floor from query string. Example: ?floor=1
+                    var floorStr = Context.GetHttpContext()?.Request.Query["floor"];
+                    if (int.TryParse(floorStr, out int floor))
+                    {
+                        await Groups.AddToGroupAsync(Context.ConnectionId, $"{GroupNames.Cashiers}_Floor_{floor}");
+                    }
                 }
                 else if (role == enRoleType.Waiter.ToString())
                 {
                     await Groups.AddToGroupAsync(Context.ConnectionId, GroupNames.Waiters);
                 }
+
+                // Admin is intentionally omitted here to prevent them from receiving hall notifications.
 
                 await base.OnConnectedAsync();
                 return;

@@ -68,9 +68,9 @@ namespace OrderingSystem.WebApi.Controllers
 
         [HttpGet("pending")]
         [Authorize(Policy = "RequireStaff")]
-        public async Task<IActionResult> GetPendingOrders([FromQuery] PageDTO page)
+        public async Task<IActionResult> GetPendingOrders([FromQuery] PageDTO page, [FromQuery] int floorNumber)
         {
-            var result = await _orderQuery.GetPendingOrdersAsync(page);
+            var result = await _orderQuery.GetPendingOrdersAsync(page, floorNumber);
             return HandleResult(result);
         }
 

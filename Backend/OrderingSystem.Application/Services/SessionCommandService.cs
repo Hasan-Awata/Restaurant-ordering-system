@@ -129,7 +129,7 @@ namespace OrderingSystem.Application.Services
                 {
                     scannedTable.Status = enTableStatus.Occupied;
                     await _tableRepository.UpdateTableAsync(scannedTable);
-                    activationResult = await CreatePendingSessionAsync(scannedTable.TableId, deviceSessionId ?? Guid.CreateVersion7());
+                    activationResult = await CreatePendingSessionAsync(scannedTable.TableId, deviceSessionId ?? Guid.CreateVersion7(), scannedTable.FloorNumber);
                 });
 
                 return activationResult!;
@@ -148,7 +148,7 @@ namespace OrderingSystem.Application.Services
             }
         }
 
-        private async Task<Result<SessionResponse>> CreatePendingSessionAsync(int tableId, Guid deviceSessionId)
+        private async Task<Result<SessionResponse>> CreatePendingSessionAsync(int tableId, Guid deviceSessionId, int floorNumber)
         {
             var tableSession = new TableSession
             {
@@ -169,7 +169,7 @@ namespace OrderingSystem.Application.Services
             };
 
             await _deviceSessionRepository.AddSessionAsync(deviceSession);
-            await _notifier.NotifyCashiersOfActivationAsync(tableId, tableSession.TableSessionId);
+            await _notifier.NotifyCashiersOfActivationAsync(tableId, tableSession.TableSessionId, floorNumber);
 
             return Result<SessionResponse>.Success(tableSession.ToResponse(deviceSession));
         }
@@ -226,7 +226,7 @@ namespace OrderingSystem.Application.Services
                 }
             }
 
-            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, session.Status);
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, session.Status, session.Table.FloorNumber);
 
             return Result<TableSessionResponse>.Success(session.ToResponse());
         }
@@ -264,6 +264,8 @@ namespace OrderingSystem.Application.Services
                 return Result.Failure("Cannot deactivate session: Active orders are being prepared or served.", enErrorType.Conflict);
             }
 
+            Table? table = null;
+
             // --- Transaction Wrapper Added ---
             await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
@@ -274,7 +276,7 @@ namespace OrderingSystem.Application.Services
 
                 await _tableSessionRepository.DeleteSessionAsync(session);
 
-                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                table = await _tableRepository.GetTableByIdAsync(session.TableId);
                 if (table != null)
                 {
                     table.Status = enTableStatus.Available;
@@ -284,7 +286,7 @@ namespace OrderingSystem.Application.Services
 
             RevokeSessionInCache(tableSessionId);
 
-            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed, table!.FloorNumber);
 
             return Result.Success();
         }
@@ -318,7 +320,7 @@ namespace OrderingSystem.Application.Services
 
             var table = await _tableRepository.GetTableByIdAsync(session.TableId);
 
-            await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber);
+            await _notifier.NotifyCashiersOfBillRequestAsync(tableSessionId, table!.TableNumber, table.FloorNumber);
             await _notifier.NotifyGuestsOfBillRequestAsync(tableSessionId);
 
             table.Status = enTableStatus.Billing;
@@ -386,6 +388,8 @@ namespace OrderingSystem.Application.Services
                 }).ToList()
             };
 
+            Table? table = null;
+
             await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
                 await _billRepository.AddBillAsync(finalBill);
@@ -402,7 +406,7 @@ namespace OrderingSystem.Application.Services
 
                 await _tableSessionRepository.UpdateSessionAsync(session);
 
-                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                table = await _tableRepository.GetTableByIdAsync(session.TableId);
                 if (table != null)
                 {
                     table.Status = enTableStatus.Available;
@@ -412,7 +416,7 @@ namespace OrderingSystem.Application.Services
 
             RevokeSessionInCache(tableSessionId);
             await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
-            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed);
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(session.TableSessionId, enSessionStatus.Closed, table!.FloorNumber);
 
             return Result<SessionResponse>.Success(session.ToResponse(null));
         }
@@ -422,6 +426,8 @@ namespace OrderingSystem.Application.Services
             var session = await _tableSessionRepository.GetActiveTableSessionWithOrdersAndDevicesAsync(tableSessionId);
             if (session == null)
                 return Result.Failure("No active table session was found.", enErrorType.NotFound);
+
+            Table? table = null;
 
             // Bypasses the constraint checking for preparing/served orders since this is an explicit cashier void action
             await _unitOfWork.ExecuteTransactionAsync(async () =>
@@ -433,7 +439,7 @@ namespace OrderingSystem.Application.Services
 
                 await _tableSessionRepository.DeleteSessionAsync(session);
 
-                var table = await _tableRepository.GetTableByIdAsync(session.TableId);
+                table = await _tableRepository.GetTableByIdAsync(session.TableId);
                 if (table != null)
                 {
                     table.Status = enTableStatus.Available;
@@ -444,7 +450,7 @@ namespace OrderingSystem.Application.Services
             RevokeSessionInCache(tableSessionId);
 
             await _notifier.NotifyCustomerOfSessionEndedAsync(tableSessionId);
-            await _notifier.NotifyCashiersOfTableSessionSyncAsync(tableSessionId, enSessionStatus.Closed);
+            await _notifier.NotifyCashiersOfTableSessionSyncAsync(tableSessionId, enSessionStatus.Closed, table!.FloorNumber);
 
             return Result.Success();
         }
@@ -496,7 +502,7 @@ namespace OrderingSystem.Application.Services
             }
 
             await _notifier.NotifyCustomerOfBillRejectedAsync(tableSessionId);
-            await _notifier.NotifyCashiersOfBillSyncAsync(tableSessionId);
+            await _notifier.NotifyCashiersOfBillSyncAsync(tableSessionId, table.FloorNumber);
 
             return Result.Success();
         }
@@ -527,7 +533,7 @@ namespace OrderingSystem.Application.Services
                 });
 
                 await _notifier.NotifyCustomerOfActivationDismissedAsync(session.TableSessionId);
-                await _notifier.NotifyCashiersOfZombieSessionClearedAsync(session.TableSessionId);
+                await _notifier.NotifyCashiersOfZombieSessionClearedAsync(session.TableSessionId, session.Table.FloorNumber);
 
                 RevokeSessionInCache(session.TableSessionId);
             }
